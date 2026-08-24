@@ -1,5 +1,7 @@
 //! IPC commands exposed to the webview frontends.
 
+use std::collections::HashMap;
+
 use serde::Deserialize;
 use serde_json::Value;
 use tauri::AppHandle;
@@ -42,9 +44,29 @@ pub fn set_hit_rects(rects: Vec<HitRect>) {
 }
 
 #[tauri::command]
-pub fn scan_desktop(app: AppHandle) -> Vec<scanner::DesktopEntry> {
+pub async fn scan_desktop() -> Vec<scanner::DesktopEntry> {
+    tauri::async_runtime::spawn_blocking(scanner::scan_desktop)
+        .await
+        .unwrap_or_default()
+}
+
+/// Batched icon resolution, run AFTER the snapshot so the UI paints fast.
+/// Each pair is `[primary_path, alternate_path]` (shortcuts fall back to their
+/// resolved target). Returns primary → cached PNG path (None on failure).
+#[tauri::command]
+pub async fn resolve_icon_pairs(
+    app: AppHandle,
+    pairs: Vec<[String; 2]>,
+) -> HashMap<String, Option<String>> {
     let cache_dir = paths::icon_cache_dir(&app);
-    scanner::scan_desktop(cache_dir)
+    let mut out: HashMap<String, Option<String>> = HashMap::with_capacity(pairs.len());
+    for pair in pairs {
+        let primary = pair[0].clone();
+        let png = crate::icons::icon_png_for(&primary, cache_dir.clone())
+            .or_else(|| crate::icons::icon_png_for(pair.get(1).map(String::as_str).unwrap_or(""), cache_dir.clone()));
+        out.insert(primary, png);
+    }
+    out
 }
 
 #[tauri::command]

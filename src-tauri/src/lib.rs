@@ -57,6 +57,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::scan_desktop,
+            commands::resolve_icon_pairs,
             commands::open_entry,
             commands::reveal_entry,
             commands::load_state,

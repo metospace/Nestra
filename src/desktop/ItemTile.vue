@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { iconSrc, openEntry, revealEntry } from "@/lib/tauri";
-import { store } from "@/stores/state";
+import { openEntry, revealEntry } from "@/lib/tauri";
+import { cachedIconUrl, store } from "@/stores/state";
 import type { DesktopEntry } from "@/types";
 
 const props = defineProps<{
   entry: DesktopEntry;
 }>();
 
-const image = computed(() => iconSrc(props.entry.iconPath));
+// 图标走内存缓存（两段式加载）；未命中时渲染字形徽章。
+const image = computed(() => cachedIconUrl(props.entry.path));
 
 function onSelect(): void {
   store.selectedItemId = props.entry.id;

@@ -10,8 +10,6 @@ use std::time::SystemTime;
 
 use serde::Serialize;
 
-use crate::icons;
-
 const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
 const SHORTCUT_EXTENSIONS: [&str; 3] = [".lnk", ".url", ".appref-ms"];
 
@@ -37,7 +35,11 @@ pub struct DesktopEntry {
 }
 
 /// Scans both desktop roots plus the two fixed shell entry points.
-pub fn scan_desktop(cache_dir: Option<std::path::PathBuf>) -> Vec<DesktopEntry> {
+///
+/// NOTE: intentionally does NOT extract shell icons — that would block the
+/// snapshot for seconds. Icons are resolved afterwards via the batched
+/// `resolve_icon_pairs` command (see AGENTS.md).
+pub fn scan_desktop() -> Vec<DesktopEntry> {
     let mut by_identity: HashMap<String, DesktopEntry> = HashMap::new();
 
     let desktop = known_folder(&FOLDERID_DESKTOP);
@@ -101,9 +103,6 @@ pub fn scan_desktop(cache_dir: Option<std::path::PathBuf>) -> Vec<DesktopEntry> 
             };
 
             let glyph = glyph_for(&display_name, &kind);
-            let icon_path =
-                icons::icon_png_for(&full_path.to_string_lossy(), cache_dir.clone())
-                    .or_else(|| icons::icon_png_for(&target, cache_dir.clone()));
 
             by_identity.entry(identity.clone()).or_insert(DesktopEntry {
                 id: identity,
@@ -117,7 +116,7 @@ pub fn scan_desktop(cache_dir: Option<std::path::PathBuf>) -> Vec<DesktopEntry> 
                 is_hidden: hidden,
                 is_fresh: fresh,
                 is_application: is_shortcut,
-                icon_path,
+                icon_path: None,
             });
         }
     }
@@ -128,7 +127,6 @@ pub fn scan_desktop(cache_dir: Option<std::path::PathBuf>) -> Vec<DesktopEntry> 
         "此电脑",
         "shell:MyComputerFolder",
         "机",
-        cache_dir.as_deref(),
     );
     add_system_entry(
         &mut by_identity,
@@ -136,7 +134,6 @@ pub fn scan_desktop(cache_dir: Option<std::path::PathBuf>) -> Vec<DesktopEntry> 
         "回收站",
         "shell:RecycleBinFolder",
         "收",
-        cache_dir.as_deref(),
     );
 
     let mut entries: Vec<DesktopEntry> = by_identity.into_values().collect();
@@ -154,15 +151,10 @@ fn add_system_entry(
     name: &str,
     target: &str,
     glyph: &str,
-    cache_dir: Option<&std::path::Path>,
 ) {
     if map.contains_key(id) {
         return;
     }
-
-    // `shell:` targets rarely resolve through the icon factory; the frontend
-    // renders its own glyph when this comes back empty.
-    let icon_path = icons::icon_png_for(target, cache_dir.map(|path| path.to_path_buf()));
 
     map.insert(
         id.to_string(),
@@ -178,7 +170,9 @@ fn add_system_entry(
             is_hidden: false,
             is_fresh: false,
             is_application: false,
-            icon_path,
+            // `shell:` targets rarely resolve through the icon factory; the
+            // frontend renders its own glyph when this comes back empty.
+            icon_path: None,
         },
     );
 }

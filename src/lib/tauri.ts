@@ -7,6 +7,13 @@ export function scanDesktop(): Promise<DesktopEntry[]> {
   return invoke<DesktopEntry[]>("scan_desktop");
 }
 
+/** 批量异步补齐图标：pairs 为 [主路径, 备选路径]；返回 主路径 → PNG 路径。 */
+export function resolveIconPairs(
+  pairs: [string, string][],
+): Promise<Record<string, string | null>> {
+  return invoke("resolve_icon_pairs", { pairs });
+}
+
 export function openEntry(target: string, launchKind: string): Promise<void> {
   return invoke("open_entry", { target, launchKind });
 }

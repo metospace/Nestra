@@ -9,10 +9,12 @@ import {
 } from "@/lib/classification";
 import {
   loadPersistedState,
+  resolveIconPairs,
   savePersistedState,
   scanDesktop,
   setHitRects,
 } from "@/lib/tauri";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import type {
   AppearanceSettings,
   CustomGroupDefinition,
@@ -92,6 +94,65 @@ export const store = reactive({
   statusMessage: "",
   selectedItemId: "",
 });
+
+/** 图标内存缓存：entry.path → asset URL。快照先无图标渲染，这里异步补齐
+ * （两段式加载，见 AGENTS.md）。失败路径记录为 null，避免反复重试。 */
+export const iconUrls = reactive(new Map<string, string>());
+
+let iconFillTimer: number | undefined;
+let iconFillBusy = false;
+
+function scheduleIconFill(): void {
+  window.clearTimeout(iconFillTimer);
+  iconFillTimer = window.setTimeout(() => void fillMissingIcons(), 120);
+}
+
+async function fillMissingIcons(): Promise<void> {
+  if (iconFillBusy) {
+    // 上一批还在解析：这批结束后 watch 会再触发一轮。
+    scheduleIconFill();
+    return;
+  }
+
+  const missing = store.entries.filter(
+    (entry) => !iconUrls.has(entry.path) && !iconUrls.has(`null:${entry.path}`),
+  );
+  if (missing.length === 0) return;
+
+  iconFillBusy = true;
+  try {
+    // 标记为进行中，防止并发批次重复请求同一集合。
+    for (const entry of missing) iconUrls.set(entry.path, "");
+
+    const pairs: [string, string][] = missing.map((entry) => [entry.path, entry.target]);
+    const resolved = await resolveIconPairs(pairs);
+
+    for (const [path, png] of Object.entries(resolved)) {
+      const url = png ? convertFileSrc(png) : null;
+      if (url) {
+        iconUrls.set(path, url);
+      } else {
+        // 解析失败：移出待解析集合并永久标记，字形徽章兜底。
+        iconUrls.delete(path);
+        iconUrls.set(`null:${path}`, "x");
+      }
+    }
+  } catch {
+    // 整批失败：回滚占位，稍后重试一次。
+    for (const entry of missing) {
+      if (iconUrls.get(entry.path) === "") iconUrls.delete(entry.path);
+    }
+    scheduleIconFill();
+  } finally {
+    iconFillBusy = false;
+  }
+}
+
+/** 组件取图标用：命中缓存返回 URL，否则 null（渲染字形徽章）。 */
+export function cachedIconUrl(entryPath: string): string | null {
+  const url = iconUrls.get(entryPath);
+  return url || null;
+}
 
 // 拖拽/缩放直接改 reactive layout，深度监听兜底持久化（debounce 内置），
 // 同时把可见面板的物理矩形同步给 Rust 做命中测试（空白区点击穿透）。
@@ -215,6 +276,8 @@ async function restoreState(): Promise<void> {
 export async function rescan(): Promise<void> {
   store.entries = await scanDesktop();
   ensurePanels();
+  // 快照已上屏，异步补齐缺失图标（不阻塞面板渲染）。
+  scheduleIconFill();
 }
 
 function ensurePanels(): void {
