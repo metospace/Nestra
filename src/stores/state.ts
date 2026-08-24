@@ -275,9 +275,29 @@ async function restoreState(): Promise<void> {
 
 export async function rescan(): Promise<void> {
   store.entries = await scanDesktop();
+  pruneGhostReferences();
   ensurePanels();
   // 快照已上屏，异步补齐缺失图标（不阻塞面板渲染）。
   scheduleIconFill();
+}
+
+/** 清理指向已不存在条目的记录，避免面板里出现幽灵项目。 */
+function pruneGhostReferences(): void {
+  const alive = new Set(store.entries.map((entry) => entry.id));
+
+  for (const itemId of Object.keys(store.manualAssignments)) {
+    if (!alive.has(itemId)) delete store.manualAssignments[itemId];
+  }
+
+  for (const [key, list] of Object.entries(store.foldedItems)) {
+    const filtered = list.filter((id) => alive.has(id));
+    if (filtered.length !== list.length) store.foldedItems[key] = filtered;
+  }
+
+  for (const [groupId, order] of Object.entries(store.itemOrders)) {
+    const filtered = order.filter((id) => alive.has(id));
+    if (filtered.length !== order.length) store.itemOrders[groupId] = filtered;
+  }
 }
 
 function ensurePanels(): void {
@@ -403,7 +423,7 @@ export function scheduleSave(): void {
     window.clearTimeout(saveTimer);
   }
 
-  saveTimer = window.setTimeout(async () => {
+  saveTimer = window.setTimeout(() => {
     saveTimer = undefined;
     const snapshot: PersistedState = {
       assignments: store.assignments,
@@ -417,13 +437,16 @@ export function scheduleSave(): void {
       appearance: store.appearance,
     };
 
-    try {
-      await savePersistedState(snapshot);
-    } catch (error) {
-      showStatus(`状态保存失败：${error}`);
-    }
+    // 串行化写入：连续快速操作时禁止并发 invoke save_state，
+    // 否则后一次保存会覆盖前一次（见 AGENTS.md）。
+    persistChain = persistChain
+      .then(() => savePersistedState(snapshot))
+      .catch((error) => showStatus(`状态保存失败：${error}`));
   }, 600);
 }
+
+/** 所有 savePersistedState 都串在这条链上，保证任意时刻只有一个写入。 */
+let persistChain: Promise<void> = Promise.resolve();
 
 let statusTimer: number | undefined;
 export function showStatus(message: string): void {
