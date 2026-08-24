@@ -1,0 +1,288 @@
+@import "tailwindcss";
+@plugin "tailwindcss-primeui";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ------------------------------------------------------------------ */
+/* Nestra design tokens                                                */
+/* ------------------------------------------------------------------ */
+
+:root {
+  --nestra-accent: #7aa2f7;
+  --nestra-accent-strong: #89ddff;
+  --nestra-text: rgba(235, 240, 250, 0.96);
+  --nestra-text-secondary: rgba(205, 214, 232, 0.66);
+  --nestra-text-faint: rgba(190, 200, 222, 0.42);
+  --nestra-line: rgba(255, 255, 255, 0.14);
+  --nestra-line-strong: rgba(255, 255, 255, 0.28);
+  --nestra-danger: #f7768e;
+  --nestra-ok: #9ece6a;
+
+  /* surface material (overridden at runtime from settings) */
+  --panel-bg: rgba(16, 19, 27, 0.74);
+  --panel-blur: 26px;
+  --panel-saturate: 1.25;
+  --panel-radius: 14px;
+  --panel-border-width: 1px;
+  --panel-opacity: 0.95;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI",
+    "Microsoft YaHei", system-ui, sans-serif;
+  color: var(--nestra-text);
+  background: transparent; /* the real Windows wallpaper shows through */
+  overflow: hidden;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The manager window gets a real backdrop instead of transparency. */
+body[data-window="manager"] {
+  background: radial-gradient(
+      120% 90% at 85% -10%,
+      rgba(122, 162, 247, 0.13),
+      transparent 55%
+    ),
+    linear-gradient(160deg, #10131b 0%, #0b0e15 58%, #0d1017 100%);
+  overflow: auto;
+}
+
+::selection {
+  background: rgba(122, 162, 247, 0.38);
+}
+
+:focus-visible {
+  outline: 1px solid var(--nestra-accent);
+  outline-offset: 2px;
+}
+
+/* Slim translucent scrollbars everywhere. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 99px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ------------------------------------------------------------------ */
+/* Panel surface materials                                             */
+/* ------------------------------------------------------------------ */
+
+.nestra-panel {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  color: var(--nestra-text);
+  border-radius: var(--panel-radius);
+  border: var(--panel-border-width) solid var(--nestra-line);
+  box-shadow:
+    0 18px 48px -18px rgba(4, 6, 12, 0.55),
+    0 2px 10px -4px rgba(4, 6, 12, 0.35);
+  overflow: hidden;
+  transition:
+    box-shadow 160ms ease,
+    border-color 160ms ease;
+}
+
+.nestra-panel:hover {
+  border-color: var(--nestra-line-strong);
+  box-shadow:
+    0 22px 56px -18px rgba(4, 6, 12, 0.65),
+    0 3px 12px -4px rgba(4, 6, 12, 0.4);
+}
+
+.nestra-panel.is-dragging,
+.nestra-panel.is-resizing {
+  transition: none;
+  cursor: grabbing !important;
+}
+
+.nestra-panel[data-material="clear"] {
+  background: color-mix(in srgb, rgba(16, 19, 27, 1) calc(var(--panel-opacity) * 78%), transparent);
+  backdrop-filter: blur(var(--panel-blur)) saturate(var(--panel-saturate));
+}
+
+.nestra-panel[data-material="matte"] {
+  background: color-mix(in srgb, rgba(22, 25, 34, 1) calc(var(--panel-opacity) * 96%), transparent);
+  backdrop-filter: none;
+}
+
+.nestra-panel[data-material="glass"] {
+  background: color-mix(in srgb, rgba(11, 13, 20, 1) calc(var(--panel-opacity) * 52%), transparent);
+  backdrop-filter: blur(44px) saturate(1.5);
+}
+
+.nestra-panel[data-material="acrylic"] {
+  background:
+    linear-gradient(
+      135deg,
+      rgba(122, 162, 247, 0.055),
+      rgba(255, 255, 255, 0.02) 38%,
+      transparent 70%
+    ),
+    color-mix(in srgb, rgba(17, 20, 29, 1) calc(var(--panel-opacity) * 68%), transparent);
+  backdrop-filter: blur(28px) saturate(1.3);
+}
+
+.nestra-panel[data-border="none"] {
+  border-color: transparent;
+}
+
+.nestra-panel[data-border="strong"] {
+  border-width: 2px;
+  border-color: var(--nestra-line-strong);
+}
+
+.nestra-panel[data-border="shadow"] {
+  border-color: transparent;
+  box-shadow:
+    0 24px 60px -16px rgba(3, 5, 10, 0.75),
+    0 4px 16px -6px rgba(3, 5, 10, 0.5);
+}
+
+/* ------------------------------------------------------------------ */
+/* Shared micro-elements                                               */
+/* ------------------------------------------------------------------ */
+
+.glyph-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: linear-gradient(
+    145deg,
+    rgba(122, 162, 247, 0.24),
+    rgba(137, 221, 255, 0.12)
+  );
+  color: var(--nestra-accent-strong);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: grab;
+  touch-action: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 78px;
+  padding: 8px 4px 7px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  cursor: grab;
+  text-align: center;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.tile:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.09);
+}
+
+.tile.is-selected {
+  background: rgba(122, 162, 247, 0.14);
+  border-color: rgba(122, 162, 247, 0.4);
+}
+
+.tile img {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.35));
+}
+
+.tile-label {
+  width: 100%;
+  font-size: 11.5px;
+  line-height: 1.28;
+  color: var(--nestra-text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+}
+
+.fresh-dot {
+  position: absolute;
+  top: 7px;
+  right: 9px;
+  width: 6px;
+  height: 6px;
+  border-radius: 99px;
+  background: var(--nestra-ok);
+  box-shadow: 0 0 6px rgba(158, 206, 106, 0.8);
+}
+
+.resize-handle {
+  position: absolute;
+  z-index: 30;
+}
+
+.status-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgba(14, 17, 24, 0.88);
+  border: 1px solid var(--nestra-line);
+  backdrop-filter: blur(18px);
+  font-size: 12.5px;
+  color: var(--nestra-text-secondary);
+  animation: toast-in 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 9000;
+  white-space: nowrap;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 260ms ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
