@@ -1,10 +1,45 @@
 //! IPC commands exposed to the webview frontends.
 
+use serde::Deserialize;
 use serde_json::Value;
 use tauri::AppHandle;
 
 use crate::paths;
 use crate::scanner;
+
+/// Interactive rectangle in **physical** screen coordinates; points inside
+/// hit the webview layer, everything else falls through to the desktop.
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct HitRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+#[tauri::command]
+pub fn set_hit_rects(rects: Vec<HitRect>) {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::RECT;
+        crate::win32::set_hit_rects(
+            rects
+                .iter()
+                .map(|r| RECT {
+                    left: r.x,
+                    top: r.y,
+                    right: r.x + r.width,
+                    bottom: r.y + r.height,
+                })
+                .collect(),
+        );
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = rects;
+    }
+}
 
 #[tauri::command]
 pub fn scan_desktop(app: AppHandle) -> Vec<scanner::DesktopEntry> {

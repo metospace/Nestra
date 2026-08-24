@@ -7,6 +7,7 @@ import {
   foldItem,
   moveItem,
   rescan,
+  setPanelVisible,
   showStatus,
   store,
   toggleFoldVisibility,
@@ -156,6 +157,23 @@ function onRefresh(): void {
             d="M13.5 8a5.5 5.5 0 1 1-1.62-3.9M13.5 1.8v2.7h-2.7"
             stroke="currentColor"
             stroke-width="1.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </button>
+
+      <button
+        class="icon-button"
+        title="隐藏该分区（在管理器「分区与分组」里可恢复）"
+        @pointerdown.stop
+        @click="setPanelVisible(panel.key, false)"
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path
+            d="M3 3l18 18M10.6 5.1A9.8 9.8 0 0 1 12 5c7 0 10 7 10 7a17.4 17.4 0 0 1-2.9 4M6.1 6.1C3.6 7.9 2 12 2 12s3 7 10 7c1.8 0 3.4-.5 4.7-1.2M9.9 9.9a3 3 0 0 0 4.2 4.2"
+            stroke="currentColor"
+            stroke-width="1.7"
             stroke-linecap="round"
             stroke-linejoin="round"
           />

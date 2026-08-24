@@ -16,6 +16,7 @@ import {
   renameCustomGroup,
   resetLayouts,
   setAppearance,
+  setPanelVisible,
   setRuleEnabled,
   store,
 } from "@/stores/state";
@@ -74,6 +75,17 @@ function itemCount(groupId: string): number {
     return (itemsByPanel.value[panel.key] ?? []).length;
   }
   return 0;
+}
+
+function groupDef(id: string) {
+  return store.customGroups.find((group) => group.id === id);
+}
+
+function onRename(groupId: string, event: Event): void {
+  const name = (event.target as HTMLInputElement).value.trim();
+  if (name) {
+    renameCustomGroup(groupId, name);
+  }
 }
 
 /* 分类规则 ------------------------------------------------------------- */
@@ -178,12 +190,17 @@ const borderOptions = [
             <span class="glyph-badge shrink-0" style="width: 30px; height: 30px; font-size: 14px">
               {{ panel.glyph }}
             </span>
-            <div class="min-w-0">
+            <div class="min-w-0 flex-1">
               <p class="m-0 truncate text-[13px] font-medium">{{ panel.title }}</p>
               <p class="m-0 text-[11px]" style="color: var(--nestra-text-faint)">
                 {{ modeLabel(panel.mode) }} · {{ itemCount(panel.groupId) }} 项
               </p>
             </div>
+            <ToggleSwitch
+              :modelValue="store.panelLayouts[panel.key]?.visible !== false"
+              title="在桌面上显示 / 隐藏该分区"
+              @update:modelValue="(value: boolean) => setPanelVisible(panel.key, value)"
+            />
           </li>
         </ul>
       </div>
@@ -194,16 +211,26 @@ const borderOptions = [
         </h2>
 
         <div
-          v-for="group in store.customGroups"
-          :key="group.id"
+          v-for="panel in store.panels.filter((p) => !p.isSystem)"
+          :key="panel.key"
           class="flex items-center gap-2 rounded-xl border p-2.5"
           style="border-color: rgba(255, 255, 255, 0.09); background: rgba(255, 255, 255, 0.03)"
         >
-          <InputText v-model="group.name" class="min-w-0 flex-1" size="small" @change="renameCustomGroup(group.id, group.name)" />
+          <InputText
+            :model-value="groupDef(panel.groupId)?.name ?? ''"
+            class="min-w-0 flex-1"
+            size="small"
+            @change="onRename(panel.groupId, $event)"
+          />
           <span class="shrink-0 text-[11px]" style="color: var(--nestra-text-faint)">
-            {{ modeLabel(group.mode) }}
+            {{ modeLabel(panel.mode) }}
           </span>
-          <Button label="删除" severity="danger" variant="text" size="small" @click="removeCustomGroup(group.id)" />
+          <ToggleSwitch
+            :modelValue="store.panelLayouts[panel.key]?.visible !== false"
+            title="在桌面上显示 / 隐藏该分组"
+            @update:modelValue="(value: boolean) => setPanelVisible(panel.key, value)"
+          />
+          <Button label="删除" severity="danger" variant="text" size="small" @click="removeCustomGroup(panel.groupId)" />
         </div>
 
         <p

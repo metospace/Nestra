@@ -35,7 +35,9 @@ onBeforeUnmount(() => {
     <!-- 分区面板 -->
     <template v-if="store.ready">
       <OrganizerPanel
-        v-for="panel in store.panels"
+        v-for="panel in store.panels.filter(
+          (p) => store.panelLayouts[p.key]?.visible !== false,
+        )"
         :key="panel.key"
         :panel="panel"
         :items="itemsByPanel[panel.key] ?? []"

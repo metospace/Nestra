@@ -24,6 +24,13 @@ export function savePersistedState(state: unknown): Promise<void> {
   return invoke("save_state", { state });
 }
 
+/** Pushes interactive rects (physical px) for the Win32 hit-test pass-through. */
+export function setHitRects(
+  rects: { x: number; y: number; width: number; height: number }[],
+): Promise<void> {
+  return invoke("set_hit_rects", { rects });
+}
+
 /** Turns a cached icon path into a URL the webview can load. */
 export function iconSrc(iconPath: string | null): string | null {
   if (!iconPath) {

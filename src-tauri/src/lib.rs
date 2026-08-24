@@ -61,6 +61,7 @@ pub fn run() {
             commands::reveal_entry,
             commands::load_state,
             commands::save_state,
+            commands::set_hit_rects,
             commands::quit_app,
         ])
         .run(tauri::generate_context!())

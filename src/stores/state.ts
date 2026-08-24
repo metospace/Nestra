@@ -11,6 +11,7 @@ import {
   loadPersistedState,
   savePersistedState,
   scanDesktop,
+  setHitRects,
 } from "@/lib/tauri";
 import type {
   AppearanceSettings,
@@ -92,10 +93,14 @@ export const store = reactive({
   selectedItemId: "",
 });
 
-// 拖拽/缩放直接改 reactive layout，深度监听兜底持久化（debounce 内置）。
+// 拖拽/缩放直接改 reactive layout，深度监听兜底持久化（debounce 内置），
+// 同时把可见面板的物理矩形同步给 Rust 做命中测试（空白区点击穿透）。
 watch(
   () => [store.panelLayouts, store.widgets],
-  () => scheduleSave(),
+  () => {
+    scheduleSave();
+    scheduleHitRectSync();
+  },
   { deep: true },
 );
 
@@ -184,6 +189,7 @@ export async function initialize(): Promise<void> {
   ensurePanels();
   ensureLayouts();
   applyAppearanceToCss();
+  scheduleHitRectSync();
   store.ready = true;
 }
 
@@ -281,6 +287,51 @@ export function applyAppearanceToCss(): void {
 }
 
 /* ------------------------------------------------------------------ */
+/* Hit-test rects（空白区点击穿透）                                      */
+/* ------------------------------------------------------------------ */
+
+let hitRectTimer: number | undefined;
+
+/** 把可见面板/小组件的矩形（换算成物理像素）推给 Rust 命中测试。 */
+export function scheduleHitRectSync(): void {
+  if (hitRectTimer !== undefined) {
+    window.clearTimeout(hitRectTimer);
+  }
+
+  hitRectTimer = window.setTimeout(async () => {
+    hitRectTimer = undefined;
+
+    const dpr = window.devicePixelRatio || 1;
+    const rects: { x: number; y: number; width: number; height: number }[] = [];
+
+    for (const layout of Object.values(store.panelLayouts)) {
+      if (layout.visible === false) continue;
+      rects.push({
+        x: Math.round(layout.x * dpr),
+        y: Math.round(layout.y * dpr),
+        width: Math.round(layout.width * dpr),
+        height: Math.round(layout.height * dpr),
+      });
+    }
+
+    for (const widget of store.widgets) {
+      rects.push({
+        x: Math.round(widget.layout.x * dpr),
+        y: Math.round(widget.layout.y * dpr),
+        width: Math.round(widget.layout.width * dpr),
+        height: Math.round(widget.layout.height * dpr),
+      });
+    }
+
+    try {
+      await setHitRects(rects);
+    } catch {
+      // 命中同步失败只影响穿透体验，不提示。
+    }
+  }, 120);
+}
+
+/* ------------------------------------------------------------------ */
 /* Persistence                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -330,6 +381,12 @@ export function updateLayout(key: string, patch: Partial<PanelLayout>): void {
   if (!layout) return;
   Object.assign(layout, patch);
   scheduleSave();
+}
+
+/** 面板显示/隐藏（隐藏后面板矩形也会从命中列表移除）。 */
+export function setPanelVisible(key: string, visible: boolean): void {
+  updateLayout(key, { visible });
+  showStatus(visible ? "分区已恢复显示" : "分区已隐藏，可在管理器恢复");
 }
 
 export function bringToFront(key: string): void {
