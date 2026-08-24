@@ -73,6 +73,8 @@ export interface PersistedState {
   itemOrders: Record<string, string[]>;
   widgets: Widget[];
   appearance: AppearanceSettings;
+  /** 快捷启动：仅存桌面条目 id 引用，绝不移动真实文件。 */
+  launcherIds: string[];
 }
 
 /** A panel rendered on the desktop layer. */

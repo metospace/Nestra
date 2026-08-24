@@ -9,6 +9,7 @@ import {
 } from "@/lib/classification";
 import {
   loadPersistedState,
+  openEntry,
   resolveIconPairs,
   savePersistedState,
   scanDesktop,
@@ -63,6 +64,9 @@ const PANEL_HEIGHT = 432;
 const PANEL_GAP = 14;
 const SCREEN_MARGIN = 18;
 
+/** 快捷启动面板的布局键。 */
+export const LAUNCHER_PANEL_KEY = "system:launcher";
+
 function defaultRuleStates(): Record<string, boolean> {
   const states: Record<string, boolean> = {};
   for (const rule of RULES) {
@@ -91,6 +95,7 @@ export const store = reactive({
   itemOrders: {} as Record<string, string[]>,
   widgets: [] as Widget[],
   appearance: { ...DEFAULT_APPEARANCE },
+  launcherIds: [] as string[],
   statusMessage: "",
   selectedItemId: "",
 });
@@ -215,6 +220,48 @@ export const itemsByPanel = computed<Record<string, DesktopEntry[]>>(() => {
   return result;
 });
 
+/** 快捷启动面板的条目：按 launcherIds 的存储顺序（= 用户添加顺序）。 */
+export const launcherEntries = computed<DesktopEntry[]>(() =>
+  store.launcherIds
+    .map((id) => store.entries.find((entry) => entry.id === id))
+    .filter((entry): entry is DesktopEntry => Boolean(entry)),
+);
+
+export function isLauncher(entryId: string): boolean {
+  return store.launcherIds.includes(entryId);
+}
+
+/** 引用语义：只记 id，不动文件。 */
+export function toggleLauncher(entryId: string): void {
+  if (isLauncher(entryId)) {
+    store.launcherIds = store.launcherIds.filter((id) => id !== entryId);
+    showStatus("已移出快捷启动");
+  } else {
+    store.launcherIds.push(entryId);
+    showStatus("已加入快捷启动，单击图标即可启动");
+  }
+  scheduleSave();
+}
+
+/** 批量启动：间隔拉起，避免同时抢占磁盘/焦点。 */
+export async function launchAll(): Promise<void> {
+  const items = launcherEntries.value;
+  if (items.length === 0) {
+    showStatus("快捷启动还没有项目，右键桌面磁贴即可添加");
+    return;
+  }
+
+  showStatus(`正在启动 ${items.length} 个项目…`);
+  for (const entry of items) {
+    try {
+      await openEntry(entry.target, entry.launchKind);
+    } catch {
+      // 单项失败不阻断批量启动。
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+  }
+}
+
 function sortForPanel(groupId: string, items: DesktopEntry[]): DesktopEntry[] {
   const order = store.itemOrders[groupId];
   if (order && order.length > 0) {
@@ -249,9 +296,24 @@ export async function initialize(): Promise<void> {
   await rescan();
   ensurePanels();
   ensureLayouts();
+  ensureLauncherLayout();
   applyAppearanceToCss();
   scheduleHitRectSync();
   store.ready = true;
+}
+
+/** 快捷启动面板首次布局：贴着屏幕右下角。 */
+function ensureLauncherLayout(): void {
+  if (store.panelLayouts[LAUNCHER_PANEL_KEY]) return;
+
+  store.panelLayouts[LAUNCHER_PANEL_KEY] = {
+    x: Math.max(20, window.innerWidth - 376),
+    y: Math.max(20, window.innerHeight - 470),
+    width: 336,
+    height: 420,
+    zIndex: 5,
+    visible: true,
+  };
 }
 
 async function restoreState(): Promise<void> {
@@ -267,6 +329,7 @@ async function restoreState(): Promise<void> {
     store.foldedItems = persisted.foldedItems ?? {};
     store.itemOrders = persisted.itemOrders ?? {};
     store.widgets = persisted.widgets ?? [];
+    store.launcherIds = persisted.launcherIds ?? [];
     store.appearance = { ...DEFAULT_APPEARANCE, ...(persisted.appearance ?? {}) };
   } catch {
     // Corrupt state falls back to defaults, exactly like the WPF StateStore.
@@ -298,6 +361,9 @@ function pruneGhostReferences(): void {
     const filtered = order.filter((id) => alive.has(id));
     if (filtered.length !== order.length) store.itemOrders[groupId] = filtered;
   }
+
+  // 快捷启动同样只保留还存在的引用（引用语义：文件没了入口也没意义）。
+  store.launcherIds = store.launcherIds.filter((id) => alive.has(id));
 }
 
 function ensurePanels(): void {
@@ -324,6 +390,16 @@ function ensurePanels(): void {
       isSystem: false,
     });
   }
+
+  // 快捷启动作为特殊面板注册，管理器里可以控制显隐。
+  panels.push({
+    key: LAUNCHER_PANEL_KEY,
+    groupId: "launcher",
+    title: "快捷启动",
+    glyph: "快",
+    mode: "mixed",
+    isSystem: true,
+  });
 
   store.panels = panels;
 }
@@ -435,6 +511,7 @@ export function scheduleSave(): void {
       itemOrders: store.itemOrders,
       widgets: store.widgets,
       appearance: store.appearance,
+      launcherIds: [...store.launcherIds],
     };
 
     // 串行化写入：连续快速操作时禁止并发 invoke save_state，

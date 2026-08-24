@@ -1,9 +1,18 @@
 <script setup lang="ts">
 import { listen } from "@tauri-apps/api/event";
 import { onBeforeUnmount, onMounted } from "vue";
+import LauncherPanel from "./LauncherPanel.vue";
 import OrganizerPanel from "./OrganizerPanel.vue";
 import WidgetFrame from "./WidgetFrame.vue";
-import { createWidget, initialize, itemsByPanel, rescan, showStatus, store } from "@/stores/state";
+import {
+  createWidget,
+  initialize,
+  itemsByPanel,
+  LAUNCHER_PANEL_KEY,
+  rescan,
+  showStatus,
+  store,
+} from "@/stores/state";
 
 let unlisten: (() => void) | undefined;
 
@@ -36,11 +45,16 @@ onBeforeUnmount(() => {
     <template v-if="store.ready">
       <OrganizerPanel
         v-for="panel in store.panels.filter(
-          (p) => store.panelLayouts[p.key]?.visible !== false,
+          (p) => p.groupId !== 'launcher' && store.panelLayouts[p.key]?.visible !== false,
         )"
         :key="panel.key"
         :panel="panel"
         :items="itemsByPanel[panel.key] ?? []"
+      />
+
+      <!-- 快捷启动（特殊面板，独立渲染） -->
+      <LauncherPanel
+        v-if="store.panelLayouts[LAUNCHER_PANEL_KEY]?.visible !== false"
       />
 
       <WidgetFrame
