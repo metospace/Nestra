@@ -1,7 +1,7 @@
 /** Typed wrappers around the Tauri IPC surface. */
 
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { DesktopEntry } from "@/types";
+import type { ClipItem, DesktopEntry } from "@/types";
 
 export function scanDesktop(): Promise<DesktopEntry[]> {
   return invoke<DesktopEntry[]>("scan_desktop");
@@ -49,4 +49,25 @@ export function iconSrc(iconPath: string | null): string | null {
   } catch {
     return null;
   }
+}
+
+/* 剪贴板历史 --------------------------------------------------------------- */
+
+export const CLIPBOARD_CHANGED_EVENT = "nestra://clipboard-changed";
+
+export function clipLoad(): Promise<ClipItem[]> {
+  return invoke("clip_load");
+}
+
+/** 复制历史项回系统剪贴板，返回被复制的文本。 */
+export function clipCopy(id: string): Promise<string> {
+  return invoke("clip_copy", { id });
+}
+
+export function clipRemove(id: string): Promise<void> {
+  return invoke("clip_remove", { id });
+}
+
+export function clipClear(): Promise<void> {
+  return invoke("clip_clear");
 }

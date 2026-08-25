@@ -27,6 +27,9 @@ onMounted(async () => {
       case "new-todo":
         createWidget("todo");
         break;
+      case "new-clipboard":
+        createWidget("clipboard");
+        break;
       case "refresh":
         void rescan().then(() => showStatus("桌面索引已刷新"));
         break;

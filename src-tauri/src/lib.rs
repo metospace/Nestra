@@ -1,6 +1,7 @@
 //! Application assembly: window lifecycle, tray menu, global shortcut and
 //! command registration.
 
+mod clipboard;
 mod commands;
 mod icons;
 mod paths;
@@ -39,6 +40,7 @@ pub fn run() {
         )
         .setup(|app| {
             prepare_desktop_layer(app.handle())?;
+            clipboard::init(app.handle());
             register_hotkeys(app.handle())?;
             build_tray(app.handle())?;
             Ok(())
@@ -63,6 +65,10 @@ pub fn run() {
             commands::load_state,
             commands::save_state,
             commands::set_hit_rects,
+            commands::clip_load,
+            commands::clip_copy,
+            commands::clip_remove,
+            commands::clip_clear,
             commands::quit_app,
         ])
         .run(tauri::generate_context!())
@@ -106,6 +112,7 @@ fn build_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
     let separator_1 = PredefinedMenuItem::separator(app)?;
     let note = MenuItem::with_id(app, "new-note", "新建便签", true, None::<&str>)?;
     let todo = MenuItem::with_id(app, "new-todo", "新建待办", true, None::<&str>)?;
+    let clipboard_item = MenuItem::with_id(app, "new-clipboard", "新建剪贴板", true, None::<&str>)?;
     let separator_2 = PredefinedMenuItem::separator(app)?;
     let refresh = MenuItem::with_id(app, "refresh", "刷新分类", true, None::<&str>)?;
     let separator_3 = PredefinedMenuItem::separator(app)?;
@@ -118,6 +125,7 @@ fn build_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
             &separator_1,
             &note,
             &todo,
+            &clipboard_item,
             &separator_2,
             &refresh,
             &separator_3,
@@ -151,6 +159,7 @@ fn handle_tray_menu(app: &tauri::AppHandle, event: MenuEvent) {
         "manager" => show_manager(app),
         "new-note" => notify_frontend(app, "new-note"),
         "new-todo" => notify_frontend(app, "new-todo"),
+        "new-clipboard" => notify_frontend(app, "new-clipboard"),
         "refresh" => notify_frontend(app, "refresh"),
         "quit" => app.exit(0),
         _ => {}

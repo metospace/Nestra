@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { ResizeDirection } from "@/composables/useSurfaceDrag";
 import { startMove, startResize } from "@/composables/useSurfaceDrag";
 import {
@@ -7,7 +8,14 @@ import {
   store,
   touchWidget,
 } from "@/stores/state";
-import type { TodoItem, Widget } from "@/types";
+import {
+  CLIPBOARD_CHANGED_EVENT,
+  clipClear,
+  clipCopy,
+  clipLoad,
+  clipRemove,
+} from "@/lib/tauri";
+import type { ClipItem, TodoItem, Widget } from "@/types";
 
 const props = defineProps<{
   widget: Widget;
@@ -79,6 +87,57 @@ function summary(): string {
   const pending = pendingCount();
   return pending === 0 ? "全部完成" : `${pending} 项待完成`;
 }
+
+/* 剪贴板历史 ------------------------------------------------------------ */
+
+const clips = ref<ClipItem[]>([]);
+let unlistenClip: (() => void) | undefined;
+
+async function loadClips(): Promise<void> {
+  try {
+    clips.value = await clipLoad();
+  } catch {
+    clips.value = [];
+  }
+}
+
+async function onCopy(item: ClipItem): Promise<void> {
+  try {
+    await clipCopy(item.id);
+    store.statusMessage = "已复制到剪贴板";
+    window.setTimeout(() => (store.statusMessage = ""), 1500);
+  } catch {
+    store.statusMessage = "复制失败";
+    window.setTimeout(() => (store.statusMessage = ""), 1500);
+  }
+}
+
+function onRemove(item: ClipItem): void {
+  void clipRemove(item.id);
+}
+
+function onClear(): void {
+  if (clipboardConfirm()) void clipClear();
+}
+
+function clipboardConfirm(): boolean {
+  return window.confirm("清空全部剪贴板历史？");
+}
+
+onMounted(() => {
+  if (props.widget.kind === "clipboard") {
+    void loadClips();
+    getCurrentWebview()
+      .listen(CLIPBOARD_CHANGED_EVENT, () => void loadClips())
+      .then((unlisten) => (unlistenClip = unlisten));
+  }
+});
+
+onBeforeUnmount(() => unlistenClip?.());
+
+function preview(text: string): string {
+  return text.length > 120 ? `${text.slice(0, 120)}…` : text;
+}
 </script>
 
 <template>
@@ -105,7 +164,7 @@ function summary(): string {
         class="glyph-badge shrink-0"
         style="width: 24px; height: 24px; font-size: 12px"
       >
-        {{ widget.kind === "note" ? "签" : "办" }}
+        {{ widget.kind === "note" ? "签" : widget.kind === "todo" ? "办" : "剪" }}
       </span>
 
       <input
@@ -141,7 +200,7 @@ function summary(): string {
     />
 
     <!-- 待办清单 -->
-    <div v-else class="flex min-h-0 flex-1 flex-col">
+    <div v-else-if="widget.kind === 'todo'" class="flex min-h-0 flex-1 flex-col">
       <form class="px-3 pt-2.5" @submit.prevent="addTodo">
         <input
           class="w-full rounded-lg border px-2.5 py-1.5 text-[12.5px] outline-none transition-colors"
@@ -205,6 +264,52 @@ function summary(): string {
         }"
       >
         {{ summary() }}
+      </footer>
+    </div>
+
+    <!-- 剪贴板历史 -->
+    <div v-else class="flex min-h-0 flex-1 flex-col">
+      <div class="flex items-center gap-2 px-3 pt-2">
+        <span class="flex-1 text-[10.5px]" style="color: var(--nestra-text-faint)">
+          点按条目复制到剪贴板
+        </span>
+        <button class="icon-button" title="清空历史" @click.stop="onClear">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+      </div>
+
+      <ul class="min-h-0 m-0 flex-1 list-none overflow-y-auto p-2.5">
+        <li
+          v-for="item in clips"
+          :key="item.id"
+          class="group flex items-start gap-2 rounded-lg px-1.5 py-1.5 transition-colors hover:bg-white/5"
+          @click="onCopy(item)"
+        >
+          <span class="min-w-0 flex-1 whitespace-pre-wrap break-all text-[12px] leading-snug" style="color: var(--nestra-text)">
+            {{ preview(item.text) }}
+          </span>
+          <span class="shrink-0 pt-0.5 text-[9.5px] tabular-nums" style="color: var(--nestra-text-faint)">
+            {{ item.createdLabel }}
+          </span>
+          <button
+            class="icon-button shrink-0 opacity-0 group-hover:opacity-100"
+            title="删除该条"
+            @click.stop="onRemove(item)"
+          >
+            <svg width="9" height="9" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+            </svg>
+          </button>
+        </li>
+      </ul>
+
+      <footer
+        class="border-t px-3 py-1.5 text-[11px]"
+        :style="{ borderColor: 'rgba(255,255,255,0.07)', color: 'var(--nestra-text-faint)' }"
+      >
+        {{ clips.length === 0 ? "暂无历史 · 复制任意文本即可记录" : `${clips.length} 条记录` }}
       </footer>
     </div>
 

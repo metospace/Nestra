@@ -124,6 +124,29 @@ pub fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+/* 剪贴板历史 --------------------------------------------------------------- */
+
+#[tauri::command]
+pub fn clip_load() -> Vec<crate::clipboard::ClipItem> {
+    crate::clipboard::snapshot()
+}
+
+/// 复制指定历史项回系统剪贴板；成功返回其文本。
+#[tauri::command]
+pub fn clip_copy(id: String) -> Result<String, String> {
+    crate::clipboard::copy_item_text(&id).ok_or_else(|| "剪贴板不可用或该项不存在".into())
+}
+
+#[tauri::command]
+pub fn clip_remove(app: AppHandle, id: String) {
+    crate::clipboard::remove_item(&app, &id);
+}
+
+#[tauri::command]
+pub fn clip_clear(app: AppHandle) {
+    crate::clipboard::clear_all(&app);
+}
+
 /// Opens an arbitrary path (file, folder or URL) through the shell.
 fn shell_execute_open(target: &str) -> Result<(), String> {
     #[cfg(windows)]

@@ -51,7 +51,13 @@ export interface TodoItem {
   completed: boolean;
 }
 
-export type WidgetKind = "note" | "todo";
+export interface ClipItem {
+  id: string;
+  text: string;
+  createdLabel: string;
+}
+
+export type WidgetKind = "note" | "todo" | "clipboard";
 
 export interface Widget {
   id: string;

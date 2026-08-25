@@ -658,12 +658,12 @@ export function resetLayouts(): void {
 /* Widgets                                                             */
 /* ------------------------------------------------------------------ */
 
-export function createWidget(kind: "note" | "todo"): void {
+export function createWidget(kind: "note" | "todo" | "clipboard"): void {
   const offset = store.widgets.length % 5;
   const widget: Widget = {
     id: crypto.randomUUID().replace(/-/g, ""),
     kind,
-    title: kind === "note" ? "便签" : "待办",
+    title: kind === "note" ? "便签" : kind === "todo" ? "待办" : "剪贴板",
     content: "",
     todos: [],
     createdAt: Date.now(),
@@ -671,7 +671,7 @@ export function createWidget(kind: "note" | "todo"): void {
       x: 120 + offset * 28,
       y: 90 + offset * 26,
       width: 310,
-      height: kind === "note" ? 250 : 320,
+      height: kind === "note" ? 250 : kind === "todo" ? 320 : 360,
       zIndex: 1000 + offset,
       visible: true,
     },
@@ -679,7 +679,9 @@ export function createWidget(kind: "note" | "todo"): void {
 
   store.widgets.push(widget);
   scheduleSave();
-  showStatus(kind === "note" ? "便签已创建" : "待办清单已创建");
+  showStatus(
+    kind === "note" ? "便签已创建" : kind === "todo" ? "待办清单已创建" : "剪贴板已创建",
+  );
 }
 
 export function removeWidget(id: string): void {
