@@ -298,8 +298,13 @@ export async function initialize(): Promise<void> {
   ensureLayouts();
   ensureLauncherLayout();
   applyAppearanceToCss();
-  scheduleHitRectSync();
   store.ready = true;
+
+  // 面板此时才真的挂载进 DOM，且桌面层窗口刚被 Rust resize 到位。
+  // 用几个递增的延迟反复校准命中矩形，覆盖冷启动期的 reflow/窗口大小竞态。
+  scheduleHitRectSync();
+  window.setTimeout(() => scheduleHitRectSync(0), 350);
+  window.setTimeout(() => scheduleHitRectSync(0), 900);
 }
 
 /** 快捷启动面板首次布局：贴着屏幕右下角。 */
@@ -451,18 +456,28 @@ export function applyAppearanceToCss(): void {
 
 let hitRectTimer: number | undefined;
 
-/** 把可见面板/小组件的矩形（换算成物理像素）推给 Rust 命中测试。 */
-export function scheduleHitRectSync(): void {
-  if (hitRectTimer !== undefined) {
-    window.clearTimeout(hitRectTimer);
-  }
+/** 把屏幕上真实可见的悬浮表面矩形（换算成物理像素）推给 Rust 命中测试。
+ * 优先读实际渲染出的 DOM（getBoundingClientRect，永远反映最终位置），
+ * 面板尚未挂载时回退到布局数值。 */
+async function pushHitRects(): Promise<void> {
+  const dpr = window.devicePixelRatio || 1;
+  const rects: { x: number; y: number; width: number; height: number }[] = [];
 
-  hitRectTimer = window.setTimeout(async () => {
-    hitRectTimer = undefined;
+  // 1) 权威来源：正在屏幕上绘制的悬浮表面（面板 + 快捷启动 + 小组件）。
+  document.querySelectorAll<HTMLElement>(".nestra-panel").forEach((el) => {
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) {
+      rects.push({
+        x: Math.round(r.left * dpr),
+        y: Math.round(r.top * dpr),
+        width: Math.round(r.width * dpr),
+        height: Math.round(r.height * dpr),
+      });
+    }
+  });
 
-    const dpr = window.devicePixelRatio || 1;
-    const rects: { x: number; y: number; width: number; height: number }[] = [];
-
+  // 2) DOM 尚未挂载（冷启动早期）：用布局数值兜底。
+  if (rects.length === 0) {
     for (const layout of Object.values(store.panelLayouts)) {
       if (layout.visible === false) continue;
       rects.push({
@@ -481,14 +496,35 @@ export function scheduleHitRectSync(): void {
         height: Math.round(widget.layout.height * dpr),
       });
     }
+  }
 
-    try {
-      await setHitRects(rects);
-    } catch {
-      // 命中同步失败只影响穿透体验，不提示。
-    }
-  }, 120);
+  try {
+    await setHitRects(rects);
+  } catch {
+    // 命中同步失败只影响穿透体验，不提示。
+  }
 }
+
+export function scheduleHitRectSync(delay = 120): void {
+  if (hitRectTimer !== undefined) {
+    window.clearTimeout(hitRectTimer);
+  }
+
+  hitRectTimer = window.setTimeout(() => {
+    hitRectTimer = undefined;
+    void pushHitRects();
+  }, delay);
+}
+
+// 桌面层被 Rust 在启动后 resize/移动过：窗口尺寸一变就要重算命中矩形，
+// 否则面板可点区域与实际显示位置错位（整层都点不动）。
+let hitResizeBound = false;
+function bindHitResizeListener(): void {
+  if (hitResizeBound) return;
+  hitResizeBound = true;
+  window.addEventListener("resize", () => scheduleHitRectSync());
+}
+bindHitResizeListener();
 
 /* ------------------------------------------------------------------ */
 /* Persistence                                                         */
