@@ -2,12 +2,173 @@
 
 use std::collections::HashMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 use crate::paths;
 use crate::scanner;
+
+static RECENT_LAUNCHES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+fn remember_launch(target: &str) {
+    if let Ok(mut recent)=RECENT_LAUNCHES.lock() {
+        recent.retain(|path|!path.eq_ignore_ascii_case(target));
+        recent.insert(0,target.to_owned());
+        recent.truncate(50);
+    }
+}
+#[tauri::command]
+pub fn recent_launches() -> Vec<String> {RECENT_LAUNCHES.lock().map(|paths|paths.clone()).unwrap_or_default()}
+
+#[tauri::command]
+pub async fn show_manager(app: AppHandle, module: Option<String>, object_id: Option<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::show_manager(&app);
+        if let Some(module) = module {
+            let _ = app.emit_to("manager", "nestra://manager-route", serde_json::json!({"module":module,"objectId":object_id}));
+        }
+    })
+        .await.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn scan_paths(paths: Vec<String>) -> Result<Vec<scanner::DesktopEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || scanner::scan_paths(&paths)).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn scan_folder(path: String) -> Result<Vec<scanner::DesktopEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || scanner::scan_folder(&path)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn scan_applications() -> Result<Vec<scanner::DesktopEntry>, String> {
+    tauri::async_runtime::spawn_blocking(scanner::scan_applications).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_clipboard_enabled(enabled: bool) { crate::clipboard::set_enabled(enabled); }
+
+#[tauri::command]
+pub async fn pick_file() -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(|| pick_path_blocking(false)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn move_to_folder(path: String, folder: Option<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::files::move_to_folder(&path, folder.as_deref())).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn list_file_moves() -> Result<Vec<crate::files::MoveRecord>, String> {
+    tauri::async_runtime::spawn_blocking(crate::files::list_file_moves).await.map_err(|e|e.to_string())
+}
+#[tauri::command]
+pub async fn undo_file_move(id: u64) -> Result<crate::files::UndoResult, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::files::undo_file_move(id)).await.map_err(|e|e.to_string())?
+}
+
+#[tauri::command]
+pub fn set_mapping_watch_paths(paths: Vec<String>) {
+    crate::watch::set_mapped_paths(paths);
+}
+
+#[tauri::command]
+pub async fn search_mapped_folders(
+    paths: Vec<String>,
+    query: String,
+    limit: usize,
+) -> Result<Vec<scanner::DesktopEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || scanner::search_folders(&paths, &query, limit.min(200)))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn search_everything(query: String, limit: usize) -> Result<crate::everything::SearchResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::everything::search(&query, limit))
+        .await.map_err(|error| error.to_string())
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayInfo {
+    pub id: String,
+    pub name: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub is_primary: bool,
+}
+
+#[tauri::command]
+pub fn list_displays(app: AppHandle) -> Result<Vec<DisplayInfo>, String> {
+    use tauri::Manager;
+    let layer = app.get_webview_window("desktop").ok_or("桌面层尚未创建")?;
+    let scale = layer.scale_factor().unwrap_or(1.0);
+    let primary = app.primary_monitor().map_err(|error| error.to_string())?;
+    let (origin_x, origin_y, _, _) = crate::win32::virtual_desktop_bounds();
+    let monitors = app.available_monitors().map_err(|error| error.to_string())?;
+    Ok(monitors.into_iter().map(|monitor| {
+        let position = monitor.position();
+        let size = monitor.size();
+        let is_primary = primary.as_ref().is_some_and(|candidate|
+            candidate.position() == position && candidate.size() == size);
+        let name = monitor.name().cloned().unwrap_or_else(|| "显示器".into());
+        DisplayInfo {
+            id: name.clone(),
+            name,
+            x: (position.x - origin_x) as f64 / scale,
+            y: (position.y - origin_y) as f64 / scale,
+            width: size.width as f64 / scale,
+            height: size.height as f64 / scale,
+            is_primary,
+        }
+    }).collect())
+}
+
+#[tauri::command]
+pub async fn pick_folder() -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(|| pick_path_blocking(true))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[cfg(windows)]
+fn pick_path_blocking(folder: bool) -> Result<Option<String>, String> {
+    use windows::core::{w, Interface};
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize,
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Shell::{
+        FileOpenDialog, IFileDialog, IFileOpenDialog, FOS_FORCEFILESYSTEM,
+        FOS_PATHMUSTEXIST, FOS_PICKFOLDERS, SIGDN_FILESYSPATH,
+    };
+    unsafe {
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().map_err(|e| e.to_string())?;
+        struct ComGuard;
+        impl Drop for ComGuard { fn drop(&mut self) { unsafe { CoUninitialize(); } } }
+        let _guard = ComGuard;
+        let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)
+            .map_err(|e| e.to_string())?;
+        let base: IFileDialog = dialog.cast().map_err(|e| e.to_string())?;
+        let options = base.GetOptions().map_err(|e| e.to_string())?;
+        base.SetOptions(options | (if folder { FOS_PICKFOLDERS } else { windows::Win32::UI::Shell::FOS_FILEMUSTEXIST }) | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST)
+            .map_err(|e| e.to_string())?;
+        base.SetTitle(if folder { w!("选择文件夹") } else { w!("选择文件") }).map_err(|e| e.to_string())?;
+        if dialog.Show(None).is_err() { return Ok(None); }
+        let item = base.GetResult().map_err(|e| e.to_string())?;
+        let value = item.GetDisplayName(SIGDN_FILESYSPATH).map_err(|e| e.to_string())?;
+        let path = value.to_string().map_err(|e| e.to_string())?;
+        CoTaskMemFree(Some(value.0.cast()));
+        Ok(Some(path))
+    }
+}
+
+#[cfg(not(windows))]
+fn pick_path_blocking(_folder: bool) -> Result<Option<String>, String> { Err("仅支持 Windows".into()) }
 
 /// Interactive rectangle in **physical** screen coordinates; points inside
 /// hit the webview layer, everything else falls through to the desktop.
@@ -59,14 +220,16 @@ pub async fn resolve_icon_pairs(
     pairs: Vec<[String; 2]>,
 ) -> HashMap<String, Option<String>> {
     let cache_dir = paths::icon_cache_dir(&app);
-    let mut out: HashMap<String, Option<String>> = HashMap::with_capacity(pairs.len());
-    for pair in pairs {
-        let primary = pair[0].clone();
-        let png = crate::icons::icon_png_for(&primary, cache_dir.clone())
-            .or_else(|| crate::icons::icon_png_for(pair.get(1).map(String::as_str).unwrap_or(""), cache_dir.clone()));
-        out.insert(primary, png);
-    }
-    out
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut out = HashMap::with_capacity(pairs.len());
+        for pair in pairs {
+            let primary = pair[0].clone();
+            let png = crate::icons::icon_png_for(&primary, cache_dir.clone())
+                .or_else(|| crate::icons::icon_png_for(&pair[1], cache_dir.clone()));
+            out.insert(primary, png);
+        }
+        out
+    }).await.unwrap_or_default()
 }
 
 #[tauri::command]
@@ -77,10 +240,13 @@ pub fn open_entry(target: String, launch_kind: String) -> Result<(), String> {
             .arg(&target)
             .spawn()
             .map_err(|error| format!("无法打开系统入口：{error}"))?;
+        remember_launch(&target);
         return Ok(());
     }
 
-    shell_execute_open(&target)
+    shell_execute_open(&target)?;
+    remember_launch(&target);
+    Ok(())
 }
 
 #[tauri::command]
@@ -106,22 +272,243 @@ pub fn load_state(app: AppHandle) -> Value {
 }
 
 #[tauri::command]
-pub fn save_state(app: AppHandle, state: Value) -> Result<(), String> {
+pub fn save_state(app: AppHandle, state: Value, origin: Option<String>, expected: Option<Value>) -> Result<(), String> {
+    static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = WRITE_LOCK.lock().map_err(|error| error.to_string())?;
     let file = paths::state_file(&app).ok_or_else(|| "无法确定状态文件位置".to_string())?;
     if let Some(parent) = file.parent() {
         paths::ensure_dir(parent);
     }
 
+    let current = match std::fs::read_to_string(&file) {
+        Ok(text) => serde_json::from_str::<Value>(&text).map_err(|error| error.to_string())?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Value::Null,
+        Err(error) => return Err(error.to_string()),
+    };
+    if current != expected.unwrap_or(Value::Null) { return Err("STATE_CONFLICT".into()); }
     let temporary = file.with_extension("json.tmp");
     let text = serde_json::to_string_pretty(&state).map_err(|error| error.to_string())?;
     std::fs::write(&temporary, text).map_err(|error| error.to_string())?;
     std::fs::rename(&temporary, &file).map_err(|error| error.to_string())?;
+
+    let _ = app.emit(
+        crate::STATE_CHANGED_EVENT,
+        origin.unwrap_or_default(),
+    );
     Ok(())
 }
 
 #[tauri::command]
 pub fn quit_app(app: AppHandle) {
+    crate::session::prepare_exit();
     app.exit(0);
+}
+
+#[tauri::command]
+pub fn rename_entry(path: String, name: String) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        crate::files::rename_entry(&path, &name)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (path, name);
+        Err("仅支持 Windows".into())
+    }
+}
+
+#[tauri::command]
+pub fn recycle_entry(path: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        crate::files::recycle_entry(&path)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        Err("仅支持 Windows".into())
+    }
+}
+
+#[tauri::command]
+pub async fn set_paused(app: AppHandle, paused: bool) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::session::set_paused(&app, paused);
+        paused
+    }).await.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn get_paused() -> bool {
+    crate::session::is_paused()
+}
+
+#[tauri::command]
+pub fn set_hide_native_icons(hide: bool) -> bool {
+    crate::session::set_hide_native_icons(hide);
+    hide
+}
+
+#[tauri::command]
+pub fn start_with_windows() -> bool {
+    #[cfg(windows)]
+    {
+        crate::startup::is_enabled()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+#[tauri::command]
+pub fn set_start_with_windows(enabled: bool) -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        crate::startup::set_enabled(enabled)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = enabled;
+        Err("仅支持 Windows".into())
+    }
+}
+
+#[tauri::command]
+pub async fn open_search(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::session::open_search(&app))
+        .await.map_err(|error| error.to_string())
+}
+
+/// 收纳语义 = 真实移动：拖进收纳区 → 移入 Desktop\.nestra\<zone>；
+/// 放回桌面 → 移回桌面顶层。文件不再出现在桌面，原生图标自然消失。
+#[tauri::command]
+pub async fn create_zone(name: String) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        tauri::async_runtime::spawn_blocking(move || crate::files::create_zone(&name))
+            .await.map_err(|error| error.to_string())?
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = name;
+        Err("仅支持 Windows".into())
+    }
+}
+
+#[tauri::command]
+pub async fn move_to_zone(path: String, zone_dir: String) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        tauri::async_runtime::spawn_blocking(move || crate::files::move_to_zone(&path, &zone_dir))
+            .await.map_err(|error| error.to_string())?
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (path, zone_dir);
+        Err("仅支持 Windows".into())
+    }
+}
+
+#[tauri::command]
+pub fn move_paths_to_zone(paths: Vec<String>, zone_dir: String) -> Result<Vec<String>, String> {
+    #[cfg(windows)]
+    {
+        crate::files::move_paths_to_zone(&paths, &zone_dir)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (paths, zone_dir);
+        Err("仅支持 Windows".into())
+    }
+}
+
+#[tauri::command]
+pub fn move_to_desktop(path: String) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        crate::files::move_to_desktop(&path)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        Err("仅支持 Windows".into())
+    }
+}
+
+/// 删除收纳区：目录里的文件全部放回桌面顶层。
+#[tauri::command]
+pub fn dissolve_zone(zone_dir: String) -> Result<u32, String> {
+    #[cfg(windows)]
+    {
+        crate::files::dissolve_zone(&zone_dir)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = zone_dir;
+        Err("仅支持 Windows".into())
+    }
+}
+
+#[tauri::command]
+pub fn rename_zone_dir(old_dir: String, new_dir: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        crate::files::rename_zone_dir(&old_dir, &new_dir)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (old_dir, new_dir);
+        Err("仅支持 Windows".into())
+    }
+}
+
+/// 桌面层需要键盘输入时调用：把前台线程的输入焦点借到层窗口上。
+#[tauri::command]
+pub async fn grant_desktop_input(app: AppHandle) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        app.run_on_main_thread(move || {
+            let granted = crate::win32::grant_keyboard_focus_on_window_thread();
+            let _ = send.send(granted);
+        }).map_err(|error| error.to_string())?;
+        tauri::async_runtime::spawn_blocking(move ||
+            receive.recv_timeout(std::time::Duration::from_secs(2)).map_err(|error| error.to_string())
+                .and_then(|granted| if granted { Ok(()) } else { Err("无法取得 WebView 键盘焦点".into()) })
+        ).await.map_err(|error| error.to_string())?
+    }
+    #[cfg(not(windows))]
+    { let _ = app; Ok(()) }
+}
+
+/// 输入完成后归还键盘焦点（搜索/重命名关闭、输入框失焦时调用）。
+#[tauri::command]
+pub fn release_desktop_input() {
+    #[cfg(windows)]
+    crate::win32::release_keyboard_focus();
+}
+
+#[tauri::command]
+pub fn show_shell_menu(
+    app: AppHandle,
+    path: String,
+    x: i32,
+    y: i32,
+    to_desktop: bool,
+    in_launcher: bool,
+    can_fold: bool,
+    can_rename: bool,
+) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        crate::shell_menu::show(&app, &path, x, y, to_desktop, in_launcher, can_fold, can_rename)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, path, x, y, to_desktop, in_launcher, can_fold, can_rename);
+        Err("仅支持 Windows".into())
+    }
 }
 
 /* 剪贴板历史 --------------------------------------------------------------- */

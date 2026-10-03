@@ -1,383 +1,57 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import Button from "@/volt/Button.vue";
-import Dialog from "@/volt/Dialog.vue";
-import InputText from "@/volt/Inputtext.vue";
-import Select from "@/volt/Select.vue";
-import Slider from "@/volt/Slider.vue";
-import ToggleSwitch from "@/volt/Toggleswitch.vue";
-import { RULES } from "@/lib/classification";
-import {
-  addCustomGroup,
-  initialize,
-  itemsByPanel,
-  removeCustomGroup,
-  renameCustomGroup,
-  resetLayouts,
-  setAppearance,
-  setPanelVisible,
-  setRuleEnabled,
-  store,
-} from "@/stores/state";
-import type { OrganizerMode, SurfaceMaterial, CornerStyle, BorderStyle } from "@/types";
-
-const currentWindow = getCurrentWebviewWindow();
-
-const tab = ref<"groups" | "rules" | "appearance" | "about">("groups");
-const tabs = [
-  { id: "groups", label: "分区与分组" },
-  { id: "rules", label: "分类规则" },
-  { id: "appearance", label: "外观" },
-  { id: "about", label: "关于" },
-] as const;
-
-onMounted(() => {
-  void initialize();
-});
-
-/* 分区与分组 ----------------------------------------------------------- */
-
-interface ModeOption {
-  label: string;
-  value: OrganizerMode;
-}
-
-const modeOptions: ModeOption[] = [
-  { label: "文件", value: "files" },
-  { label: "应用", value: "applications" },
-  { label: "混合", value: "mixed" },
-];
-
-function modeLabel(mode: OrganizerMode): string {
-  return modeOptions.find((option) => option.value === mode)?.label ?? mode;
-}
-
-const createDialogVisible = ref(false);
-const newGroupName = ref("");
-const newGroupMode = ref<OrganizerMode>("mixed");
-
-function openCreateDialog(): void {
-  newGroupName.value = "";
-  newGroupMode.value = "mixed";
-  createDialogVisible.value = true;
-}
-
-function submitCreate(): void {
-  const name = newGroupName.value.trim();
-  if (!name) return;
-  addCustomGroup(name, newGroupMode.value);
-  createDialogVisible.value = false;
-}
-
-function itemCount(groupId: string): number {
-  for (const panel of store.panels.filter((p) => p.groupId === groupId)) {
-    return (itemsByPanel.value[panel.key] ?? []).length;
-  }
-  return 0;
-}
-
-function groupDef(id: string) {
-  return store.customGroups.find((group) => group.id === id);
-}
-
-function onRename(groupId: string, event: Event): void {
-  const name = (event.target as HTMLInputElement).value.trim();
-  if (name) {
-    renameCustomGroup(groupId, name);
-  }
-}
-
-/* 分类规则 ------------------------------------------------------------- */
-
-const fileRules = RULES.filter((rule) => rule.mode === "files");
-const appRules = RULES.filter((rule) => rule.mode === "applications");
-
-/* 外观 ----------------------------------------------------------------- */
-
-const materialOptions = [
-  { label: "清透 · 深色玻璃", value: "clear" },
-  { label: "雾面 · 实底安静", value: "matte" },
-  { label: "毛玻璃 · 重度模糊", value: "glass" },
-  { label: "亚克力 · 微光渐变", value: "acrylic" },
-] as const satisfies readonly { label: string; value: SurfaceMaterial }[];
-
-const cornerOptions = [
-  { label: "直角 · 2px", value: "square" },
-  { label: "紧凑 · 8px", value: "compact" },
-  { label: "标准 · 14px", value: "standard" },
-  { label: "大圆角 · 22px", value: "rounded" },
-] as const satisfies readonly { label: string; value: CornerStyle }[];
-
-const borderOptions = [
-  { label: "无边框", value: "none" },
-  { label: "纤细描边", value: "subtle" },
-  { label: "明显描边", value: "strong" },
-  { label: "纯阴影", value: "shadow" },
-] as const satisfies readonly { label: string; value: BorderStyle }[];
+import { surfaceAppearance, surfaceVariables } from '@/domain/presentation';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import UButton from '@nuxt/ui/components/Button.vue';
+import UIcon from '@nuxt/ui/components/Icon.vue';
+import USelect from '@nuxt/ui/components/Select.vue';
+import USwitch from '@nuxt/ui/components/Switch.vue';
+import USlider from '@nuxt/ui/components/Slider.vue';
+import FileManagement from './FileManagement.vue';
+import LauncherManagement from './LauncherManagement.vue';
+import WidgetManagement from './WidgetManagement.vue';
+import LayoutManagement from './LayoutManagement.vue';
+import SurfaceManagement from './SurfaceManagement.vue';
+import DataManagement from './DataManagement.vue';
+import SearchPanel from '@/features/SearchPanel.vue';
+import { cachedIconUrl, initialize, itemsByPanel, launcherEntries, locateSurface, mappingErrors, refreshDisplays, rescan, setAppearance, setHideNativeIcons, setPaused, setStartWithWindows, showStatus, store } from '@/stores/state';
+import { requestOpenSearch, searchEverything } from '@/lib/tauri';
+import type { AppearanceSettings } from '@/types';
+const currentWindow=getCurrentWebviewWindow();
+const sections=[{id:'overview',label:'概览',icon:'i-lucide-house'},{id:'files',label:'文件与收纳',icon:'i-lucide-folders'},{id:'surfaces',label:'收纳栏设置',icon:'i-lucide-sliders-horizontal'},{id:'launcher',label:'快捷启动',icon:'i-lucide-rocket'},{id:'search',label:'搜索',icon:'i-lucide-search'},{id:'widgets',label:'小组件',icon:'i-lucide-panels-top-left'},{id:'layout',label:'布局与显示器',icon:'i-lucide-monitor'},{id:'appearance',label:'外观',icon:'i-lucide-palette'},{id:'data',label:'数据与恢复',icon:'i-lucide-archive-restore'},{id:'system',label:'系统',icon:'i-lucide-settings-2'}];
+const section=ref('overview'),addSignal=ref(0),initialId=ref(''),provider=ref('正在检测 Everything…'),refreshing=ref(false);
+let unlisten:(()=>void)|undefined;
+const desktopSurfaces=computed(()=>store.panels.filter(p=>!store.tabGroups.some(t=>t.groupIds.includes(p.groupId))));
+function entriesFor(key:string){return key==='system:launcher'?launcherEntries.value:itemsByPanel.value[key]??[]}
+function previewVariables(key:string){return store.panelLayouts[key]?surfaceVariables(store.panelLayouts[key]!,store.appearance):{}}
+function previewAppearance(key:string){return store.panelLayouts[key]?surfaceAppearance(store.panelLayouts[key]!,store.appearance):store.appearance}
+const surfaceCount=computed(()=>store.panels.filter(p=>!store.tabGroups.some(t=>t.groupIds.includes(p.groupId))).length+store.widgets.length);
+const hidden=computed(()=>[...store.panels.filter(p=>!store.tabGroups.some(t=>t.groupIds.includes(p.groupId))).filter(p=>store.panelLayouts[p.key]?.visible===false).map(p=>({key:p.key,title:p.title})),...store.widgets.filter(w=>w.layout.visible===false).map(w=>({key:`widget:${w.id}`,title:w.title}))]);
+async function refresh(){refreshing.value=true;try{await rescan();await refreshDisplays();provider.value=(await searchEverything('')).message}catch(e){showStatus(`刷新失败：${e}`)}finally{refreshing.value=false}}
+function goto(id:string){initialId.value="";addSignal.value=0;section.value=id}
+function add(){section.value='files';addSignal.value++}
+function appearance(key:keyof AppearanceSettings,value:unknown){setAppearance({[key]:value})}
+const materialItems=[{label:'磨砂',value:'matte'},{label:'清透',value:'clear'},{label:'玻璃',value:'glass'},{label:'亚克力',value:'acrylic'}];
+onMounted(async()=>{await initialize();void refresh();unlisten=await currentWindow.listen<{module:string;objectId?:string}>('nestra://manager-route',event=>{if(sections.some(s=>s.id===event.payload.module))section.value=event.payload.module;initialId.value=event.payload.objectId??''})});
+onUnmounted(()=>unlisten?.());
 </script>
-
 <template>
-  <div class="mx-auto flex min-h-screen w-full max-w-[880px] flex-col px-8 pb-10 pt-7">
-    <!-- 头部 -->
-    <header class="flex items-center gap-3.5">
-      <span
-        class="flex h-11 w-11 items-center justify-center rounded-xl text-lg font-bold"
-        style="
-          background: linear-gradient(145deg, rgba(122, 162, 247, 0.28), rgba(137, 221, 255, 0.12));
-          color: var(--nestra-accent-strong);
-          border: 1px solid rgba(122, 162, 247, 0.3);
-        "
-      >
-        N
-      </span>
-      <div class="min-w-0">
-        <h1 class="m-0 text-[19px] font-semibold leading-tight">Nestra 管理器</h1>
-        <p class="m-0 mt-0.5 text-xs" style="color: var(--nestra-text-secondary)">
-          桌面上的 {{ store.entries.length }} 个项目正在被 {{ store.panels.length }} 个分区收纳
-        </p>
-      </div>
-
-      <div class="flex-1" />
-      <span
-        class="rounded-full border px-2.5 py-1 text-[11px]"
-        style="border-color: rgba(255, 255, 255, 0.14); color: var(--nestra-text-faint)"
-      >
-        v0.1.0 · Tauri
-      </span>
-      <Button
-        label="隐藏窗口"
-        variant="text"
-        size="small"
-        title="隐藏到托盘；Ctrl+Alt+G 可再次呼出"
-        @click="currentWindow.hide()"
-      />
-    </header>
-
-    <!-- 导航 -->
-    <nav
-      class="mt-6 inline-flex w-fit rounded-xl border p-1"
-      style="border-color: rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.04)"
-    >
-      <button
-        v-for="item in tabs"
-        :key="item.id"
-        class="cursor-pointer rounded-lg px-4 py-1.5 text-[13px] transition-colors"
-        :style="
-          tab === item.id
-            ? 'background: rgba(122,162,247,0.18); color: var(--nestra-text); font-weight:600'
-            : 'color: var(--nestra-text-secondary)'
-        "
-        @click="tab = item.id"
-      >
-        {{ item.label }}
-      </button>
-    </nav>
-
-    <!-- 分区与分组 -->
-    <section v-if="tab === 'groups'" class="mt-5 grid grid-cols-[1fr_360px] gap-5">
-      <div>
-        <h2 class="mb-2.5 text-[13px] font-semibold" style="color: var(--nestra-text-secondary)">
-          系统分区
-        </h2>
-        <ul class="m-0 grid list-none grid-cols-2 gap-2.5 p-0">
-          <li
-            v-for="panel in store.panels.filter((p) => p.isSystem)"
-            :key="panel.key"
-            class="flex items-center gap-3 rounded-xl border p-3"
-            style="border-color: rgba(255, 255, 255, 0.09); background: rgba(255, 255, 255, 0.03)"
-          >
-            <span class="glyph-badge shrink-0" style="width: 30px; height: 30px; font-size: 14px">
-              {{ panel.glyph }}
-            </span>
-            <div class="min-w-0 flex-1">
-              <p class="m-0 truncate text-[13px] font-medium">{{ panel.title }}</p>
-              <p class="m-0 text-[11px]" style="color: var(--nestra-text-faint)">
-                {{ modeLabel(panel.mode) }} · {{ itemCount(panel.groupId) }} 项
-              </p>
-            </div>
-            <ToggleSwitch
-              :modelValue="store.panelLayouts[panel.key]?.visible !== false"
-              title="在桌面上显示 / 隐藏该分区"
-              @update:modelValue="(value: boolean) => setPanelVisible(panel.key, value)"
-            />
-          </li>
-        </ul>
-      </div>
-
-      <div class="flex flex-col gap-2.5">
-        <h2 class="mb-0.5 text-[13px] font-semibold" style="color: var(--nestra-text-secondary)">
-          自定义分组
-        </h2>
-
-        <div
-          v-for="panel in store.panels.filter((p) => !p.isSystem)"
-          :key="panel.key"
-          class="flex items-center gap-2 rounded-xl border p-2.5"
-          style="border-color: rgba(255, 255, 255, 0.09); background: rgba(255, 255, 255, 0.03)"
-        >
-          <InputText
-            :model-value="groupDef(panel.groupId)?.name ?? ''"
-            class="min-w-0 flex-1"
-            size="small"
-            @change="onRename(panel.groupId, $event)"
-          />
-          <span class="shrink-0 text-[11px]" style="color: var(--nestra-text-faint)">
-            {{ modeLabel(panel.mode) }}
-          </span>
-          <ToggleSwitch
-            :modelValue="store.panelLayouts[panel.key]?.visible !== false"
-            title="在桌面上显示 / 隐藏该分组"
-            @update:modelValue="(value: boolean) => setPanelVisible(panel.key, value)"
-          />
-          <Button label="删除" severity="danger" variant="text" size="small" @click="removeCustomGroup(panel.groupId)" />
-        </div>
-
-        <p
-          v-if="store.customGroups.length === 0"
-          class="m-0 rounded-xl border border-dashed p-4 text-center text-xs"
-          style="border-color: rgba(255, 255, 255, 0.14); color: var(--nestra-text-faint)"
-        >
-          还没有自定义分组。创建后把任意项目拖进去，规则不会动它。
-        </p>
-
-        <Button label="新建分组" @click="openCreateDialog" />
-        <Button label="重置桌面面板布局" variant="outlined" size="small" @click="resetLayouts" />
-      </div>
-    </section>
-
-    <!-- 分类规则 -->
-    <section v-else-if="tab === 'rules'" class="mt-5 grid grid-cols-2 gap-5">
-      <div v-for="section in [
-        { title: '文件分区规则', rules: fileRules },
-        { title: '应用分类词典', rules: appRules },
-      ]"
-        :key="section.title"
-      >
-        <h2 class="mb-2.5 text-[13px] font-semibold" style="color: var(--nestra-text-secondary)">
-          {{ section.title }}
-        </h2>
-        <ul class="m-0 list-none p-0">
-          <li
-            v-for="rule in section.rules"
-            :key="rule.id"
-            class="mb-2 flex items-center gap-3 rounded-xl border p-3"
-            style="border-color: rgba(255, 255, 255, 0.09); background: rgba(255, 255, 255, 0.03)"
-          >
-            <span class="glyph-badge shrink-0" style="width: 30px; height: 30px; font-size: 14px">
-              {{ rule.glyph }}
-            </span>
-            <div class="min-w-0 flex-1">
-              <p class="m-0 text-[13px]">{{ rule.title }}</p>
-              <p class="m-0 text-[11px]" style="color: var(--nestra-text-faint)">{{ rule.detail }}</p>
-            </div>
-            <ToggleSwitch
-              :modelValue="store.ruleStates[rule.id] !== false"
-              @update:modelValue="(value: boolean) => setRuleEnabled(rule.id, value)"
-            />
-          </li>
-        </ul>
-      </div>
-    </section>
-
-    <!-- 外观 -->
-    <section v-else-if="tab === 'appearance'" class="mt-5 max-w-[520px]">
-      <div class="grid grid-cols-[130px_1fr] items-center gap-x-4 gap-y-5 rounded-2xl border p-5"
-        style="border-color: rgba(255,255,255,0.09); background: rgba(255,255,255,0.03)"
-      >
-        <label class="text-[13px]">表面材质</label>
-        <Select
-          v-model="store.appearance.surfaceMaterial"
-          :options="[...materialOptions]"
-          optionLabel="label"
-          optionValue="value"
-          placeholder="选择材质"
-          class="w-full"
-          @update:modelValue="(value: SurfaceMaterial) => setAppearance({ surfaceMaterial: value })"
-        />
-
-        <label class="text-[13px]">圆角</label>
-        <Select
-          v-model="store.appearance.cornerStyle"
-          :options="[...cornerOptions]"
-          optionLabel="label"
-          optionValue="value"
-          class="w-full"
-          @update:modelValue="(value: CornerStyle) => setAppearance({ cornerStyle: value })"
-        />
-
-        <label class="text-[13px]">边框</label>
-        <Select
-          v-model="store.appearance.borderStyle"
-          :options="[...borderOptions]"
-          optionLabel="label"
-          optionValue="value"
-          class="w-full"
-          @update:modelValue="(value: BorderStyle) => setAppearance({ borderStyle: value })"
-        />
-
-        <label class="text-[13px]">面板不透明度</label>
-        <div class="flex items-center gap-3">
-          <Slider
-            :modelValue="store.appearance.panelOpacity"
-            :min="0.45"
-            :max="1"
-            :step="0.05"
-            class="flex-1"
-            @update:modelValue="(value: number) => setAppearance({ panelOpacity: value })"
-          />
-          <span class="w-10 text-right text-[12.5px]" style="color: var(--nestra-text-secondary)">
-            {{ Math.round(store.appearance.panelOpacity * 100) }}%
-          </span>
-        </div>
-      </div>
-
-      <p class="mt-3 text-xs" style="color: var(--nestra-text-faint)">
-        材质与透明度即时作用于桌面层；每个设置都会自动保存。
-      </p>
-    </section>
-
-    <!-- 关于 -->
-    <section v-else class="mt-5 max-w-[520px]">
-      <div class="rounded-2xl border p-5" style="border-color: rgba(255,255,255,0.09); background: rgba(255,255,255,0.03)">
-        <h2 class="m-0 text-[15px] font-semibold">Nestra</h2>
-        <p class="mt-1 mb-4 text-[12.5px]" style="color: var(--nestra-text-secondary)">
-          A calm, flexible desktop organizer for Windows.
-        </p>
-        <dl class="m-0 grid grid-cols-[120px_1fr] gap-y-2 text-[12.5px]">
-          <dt style="color: var(--nestra-text-faint)">全局热键</dt>
-          <dd class="m-0"><kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>G</kbd> 显示 / 隐藏管理器</dd>
-          <dt style="color: var(--nestra-text-faint)">打开项目</dt>
-          <dd class="m-0">双击图标；右键在资源管理器中显示</dd>
-          <dt style="color: var(--nestra-text-faint)">折叠项目</dt>
-          <dd class="m-0">拖到面板标题栏的「折叠」上</dd>
-          <dt style="color: var(--nestra-text-faint)">数据位置</dt>
-          <dd class="m-0">%LOCALAPPDATA%\app.nestra.desktop\state.json</dd>
-        </dl>
-      </div>
-    </section>
-
-    <!-- 新建分组对话框 -->
-    <Dialog
-      v-model:visible="createDialogVisible"
-      modal
-      header="新建分组"
-      :style="{ width: '380px' }"
-    >
-      <div class="grid gap-4">
-        <label class="grid gap-1.5">
-          <span class="text-xs" style="color: var(--nestra-text-secondary)">名称</span>
-          <InputText v-model="newGroupName" placeholder="例如：素材收集" @keyup.enter="submitCreate" />
-        </label>
-        <label class="grid gap-1.5">
-          <span class="text-xs" style="color: var(--nestra-text-secondary)">接收类型</span>
-          <Select v-model="newGroupMode" :options="modeOptions" optionLabel="label" optionValue="value" class="w-full" />
-        </label>
-      </div>
-      <template #footer>
-        <Button label="取消" variant="text" @click="createDialogVisible = false" />
-        <Button label="创建" :disabled="!newGroupName.trim()" @click="submitCreate" />
-      </template>
-    </Dialog>
-  </div>
+<div class="control-center">
+  <aside class="manager-sidebar"><div class="manager-brand"><span class="brand-symbol">N</span><div><strong>Nestra</strong><small>桌面工作空间</small></div></div><nav aria-label="控制中心导航"><button v-for="item in sections" :key="item.id" :class="{selected:section===item.id}" @click="goto(item.id)"><UIcon :name="item.icon"/><span>{{item.label}}</span></button></nav><div class="sidebar-footer"><span class="status-dot" :class="{'is-paused':store.paused}"/>{{store.paused?'桌面内容已暂停':'桌面内容运行中'}}<small>控制中心 · 本机配置</small></div></aside>
+  <div class="manager-main"><header class="manager-topbar"><span>{{sections.find(s=>s.id===section)?.label}}</span><div class="flex items-center gap-2"><UButton color="neutral" variant="ghost" icon="i-lucide-search" size="sm" @click="requestOpenSearch">全局搜索 <kbd>Ctrl Alt F</kbd></UButton><UButton color="neutral" variant="ghost" icon="i-lucide-minus" aria-label="最小化控制中心" @click="currentWindow.minimize()"/><UButton color="neutral" variant="ghost" icon="i-lucide-x" aria-label="隐藏控制中心" @click="currentWindow.hide()"/></div></header>
+  <main class="manager-content"><div v-if="store.persistenceBlocked" class="error-callout" role="alert">配置加载失败或版本不兼容，已阻止写入以保护原配置。请检查数据与恢复，或使用与配置版本一致的程序。</div><div v-if="!store.ready" class="manager-empty">正在加载工作空间…</div><template v-else>
+  <template v-if="section==='overview'"><div class="page-heading"><div><h1>桌面工作空间</h1><p>查看桌面栏，调整显示，找回隐藏的内容。</p></div><UButton icon="i-lucide-plus" @click="add">添加桌面内容</UButton></div><div class="overview-summary"><button @click="goto('files')"><strong>{{store.customGroups.length}}</strong> 文件来源</button><button @click="goto('launcher')"><strong>{{store.launcherIds.length}}</strong> 快捷入口</button><button @click="goto('widgets')"><strong>{{store.widgets.length}}</strong> 小组件</button><button @click="goto('layout')"><strong>{{surfaceCount}}</strong> 桌面栏</button></div>
+  <section class="overview-desktop"><div class="card-heading"><h2>我的桌面</h2><UButton variant="ghost" size="sm" @click="goto('layout')">排列与显示器</UButton></div><div class="overview-surface-grid"><article v-for="surface in desktopSurfaces" :key="surface.key" class="overview-surface-card"><div class="overview-surface-image"><div class="nestra-panel overview-mini-panel" :style="previewVariables(surface.key)" :data-material="previewAppearance(surface.key).surfaceMaterial" :data-border="previewAppearance(surface.key).borderStyle"><header><UIcon :name="surface.groupId==='launcher'?'i-lucide-command':'i-lucide-folder'"/><strong>{{surface.title}}</strong><span>{{entriesFor(surface.key).length}}</span></header><div class="overview-mini-files"><div v-for="entry in entriesFor(surface.key).slice(0,4)" :key="entry.id"><img v-if="cachedIconUrl(entry.path)" :src="cachedIconUrl(entry.path)!" alt=""/><UIcon v-else :name="entry.kind==='folder'?'i-lucide-folder':'i-lucide-file-text'"/><small>{{entry.name}}</small></div><small v-if="!entriesFor(surface.key).length" class="muted-text">这里还没有项目</small></div></div></div><div class="overview-surface-caption"><div><strong>{{surface.title}}</strong><small>{{store.panelLayouts[surface.key]?.visible===false?'已隐藏':'桌面显示中'}} · {{store.panelLayouts[surface.key]?.appearance?'独立样式':'全局样式'}}</small></div><UButton size="xs" variant="ghost" @click="locateSurface(surface.key)">{{store.panelLayouts[surface.key]?.visible===false?'恢复':'定位'}}</UButton><UButton size="xs" variant="outline" @click="goto('surfaces');initialId=surface.key">设置</UButton></div></article></div></section>
+  <div class="overview-columns"><div class="manager-card"><div class="card-heading"><h2>常用操作</h2></div><button class="quick-action" @click="add"><UIcon name="i-lucide-folder-plus"/><span><strong>添加文件来源</strong><small>收纳区、文件夹映射与分类视图</small></span><UIcon name="i-lucide-chevron-right"/></button><button class="quick-action" @click="section='launcher'"><UIcon name="i-lucide-rocket"/><span><strong>管理快捷启动</strong><small>固定入口与工作场景集合</small></span><UIcon name="i-lucide-chevron-right"/></button><button class="quick-action" @click="section='widgets'"><UIcon name="i-lucide-sticky-note"/><span><strong>添加便签或待办</strong><small>把今天要做的事留在桌面</small></span><UIcon name="i-lucide-chevron-right"/></button></div><div class="manager-card"><div class="card-heading"><h2>运行状态</h2><UButton variant="ghost" size="sm" :loading="refreshing" @click="refresh">刷新</UButton></div><div class="health-row"><span>全盘搜索</span><small>{{provider}}</small></div><div class="health-row"><span>应用目录</span><small>{{store.applications.length}} 个入口 · 开始菜单与已安装应用</small></div><div class="health-row"><span>桌面模式</span><small>{{store.hideNativeIcons?'接管模式 · 原生图标隐藏':'共存模式 · 保留原生图标'}}</small></div><div class="health-row"><span>文件夹映射</span><small>{{Object.keys(mappingErrors).length?`${Object.keys(mappingErrors).length} 个需要检查`:'可用'}}</small></div><div class="health-row"><span>显示器</span><small>{{store.displays.length}} 个已连接</small></div></div></div><div v-if="hidden.length" class="manager-card"><div class="card-heading"><h2>已隐藏的内容</h2><span>内容仍然保留</span></div><div v-for="surface in hidden" :key="surface.key" class="settings-row"><span>{{surface.title}}</span><UButton variant="outline" size="sm" @click="locateSurface(surface.key)">恢复并定位</UButton></div></div></template>
+  <FileManagement v-else-if="section==='files'" :initial-id="initialId" :add-signal="addSignal"/>
+  <SurfaceManagement v-else-if="section==='surfaces'" :initial-id="initialId" @manage-content="id=>{section=id==='launcher'?'launcher':'files';initialId=id}"/>
+  <LauncherManagement v-else-if="section==='launcher'"/>
+  <template v-else-if="section==='search'"><div class="page-heading"><div><h1>搜索</h1><p>从桌面、收纳区、映射目录、已安装应用和全盘索引中查找。</p></div></div><SearchPanel/></template>
+  <WidgetManagement v-else-if="section==='widgets'"/>
+  <LayoutManagement v-else-if="section==='layout'"/>
+  <DataManagement v-else-if="section==='data'"/>
+  <template v-else-if="section==='appearance'"><div class="page-heading"><div><h1>外观</h1><p>统一桌面内容与控制中心的视觉语言。</p></div></div><div class="appearance-columns"><div class="manager-card form-stack"><label>主题<USelect :model-value="store.appearance.theme??'light'" :items="[{label:'浅色',value:'light'},{label:'深色',value:'dark'}]" @update:model-value="v=>appearance('theme',v)"/></label><label>桌面材质<USelect :model-value="store.appearance.surfaceMaterial" :items="materialItems" @update:model-value="v=>appearance('surfaceMaterial',v)"/></label><label>圆角<USelect :model-value="store.appearance.cornerStyle" :items="[{label:'方正',value:'square'},{label:'紧凑',value:'compact'},{label:'标准',value:'standard'},{label:'圆润',value:'rounded'}]" @update:model-value="v=>appearance('cornerStyle',v)"/></label><label>边界<USelect :model-value="store.appearance.borderStyle" :items="[{label:'无边框',value:'none'},{label:'细线',value:'subtle'},{label:'清晰边框',value:'strong'},{label:'阴影',value:'shadow'}]" @update:model-value="v=>appearance('borderStyle',v)"/></label><label>面板不透明度 · {{Math.round(store.appearance.panelOpacity*100)}}%<USlider :model-value="store.appearance.panelOpacity" :min=".45" :max="1" :step=".01" aria-label="面板不透明度" @update:model-value="v=>appearance('panelOpacity',v)"/></label></div><div class="appearance-preview"><span class="muted-text">实时预览</span><div class="nestra-panel preview-surface" :data-material="store.appearance.surfaceMaterial" :data-border="store.appearance.borderStyle"><header class="panel-header"><UIcon name="i-lucide-folder"/><strong>项目资料</strong><span class="muted-text">3 项</span></header><div class="preview-files"><div v-for="name in ['设计稿','项目文档','待处理']" :key="name"><UIcon name="i-lucide-file-text"/><span>{{name}}</span></div></div></div><small class="muted-text">实际桌面面板同步生效。</small></div></div></template>
+  <template v-else-if="section==='system'"><div class="page-heading"><div><h1>系统</h1><p>控制桌面层、启动行为与搜索依赖。</p></div></div><div class="manager-card"><div class="settings-row"><div><h2>显示桌面内容</h2><p>暂停时隐藏面板和小组件，配置与内容保留。</p></div><USwitch :model-value="!store.paused" aria-label="显示桌面内容" @update:model-value="v=>setPaused(!v)"/></div><div class="settings-row"><div><h2>随 Windows 启动</h2><p>登录后自动恢复桌面工作空间。</p></div><USwitch :model-value="store.startWithWindows" aria-label="随 Windows 启动" @update:model-value="setStartWithWindows"/></div><div class="settings-row"><div><h2>隐藏原生桌面图标</h2><p>默认保留原生图标；开启后由 Nestra 接管显示。暂停或退出会恢复。</p></div><USwitch :model-value="store.hideNativeIcons" aria-label="隐藏原生桌面图标" @update:model-value="setHideNativeIcons"/></div></div><div class="manager-card"><div class="card-heading"><h2>全局搜索</h2><kbd>Ctrl + Alt + F</kbd></div><p>{{provider}}</p><p class="muted-text">Everything 是本机文件索引程序。运行后 Nestra 通过本机 IPC 查询全盘文件；未运行时仍可搜索桌面、收纳区、映射目录和应用。</p><UButton variant="outline" @click="requestOpenSearch">打开全局搜索</UButton></div><div class="manager-card"><h2>关于 Nestra</h2><p class="muted-text">桌面工作空间 · Nuxt UI · 配置格式 v2</p><p class="muted-text">关闭控制中心会隐藏窗口；完全退出请使用系统托盘菜单。</p></div></template>
+  </template></main></div><div v-if="store.statusMessage" class="manager-toast" role="status">{{store.statusMessage}}</div>
+</div>
 </template>

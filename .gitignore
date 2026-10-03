@@ -6,6 +6,9 @@ dist/
 src-tauri/target/
 src-tauri/gen/schemas/
 
+# Local release builds and user-state backups
+releases/
+
 # Logs
 *.log
 

@@ -32,7 +32,7 @@ export function startMove(
   layout: PanelLayout,
   constraints: SurfaceConstraints = {},
 ): void {
-  if (event.button !== 0) return;
+  if (event.button !== 0 || layout.locked) return;
   const originX = event.clientX;
   const originY = event.clientY;
   const startX = layout.x;
@@ -62,7 +62,7 @@ export function startResize(
   layout: PanelLayout,
   constraints: SurfaceConstraints = {},
 ): void {
-  if (event.button !== 0) return;
+  if (event.button !== 0 || layout.locked) return;
   const originX = event.clientX;
   const originY = event.clientY;
   const start = { ...layout };
@@ -110,14 +110,24 @@ function attachGesture(
   event: PointerEvent,
   onMove: (move: PointerEvent) => void,
 ): void {
+  const target = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+  const pointerId = event.pointerId;
   const end = () => {
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", end);
+    window.removeEventListener("pointercancel", end);
+    window.removeEventListener("blur", end);
+    target?.removeEventListener("lostpointercapture", end);
+    if (target?.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId);
     document.body.classList.remove("is-gesturing");
   };
 
   window.addEventListener("pointermove", onMove);
   window.addEventListener("pointerup", end);
+  window.addEventListener("pointercancel", end);
+  window.addEventListener("blur", end);
+  target?.addEventListener("lostpointercapture", end);
+  target?.setPointerCapture(pointerId);
   document.body.classList.add("is-gesturing");
   event.preventDefault();
 }

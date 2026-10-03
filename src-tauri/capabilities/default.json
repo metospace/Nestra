@@ -2,7 +2,11 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Nestra default capability: core events plus global shortcut and opener plugins.",
-  "windows": ["desktop", "manager"],
+  "windows": [
+    "desktop",
+    "manager",
+    "search"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-show",
@@ -16,11 +20,25 @@
     "core:app:default",
     {
       "identifier": "core:event:allow-emit-to",
-      "allow": [{ "url": "http://**" }, { "url": "tauri://**" }]
+      "allow": [
+        {
+          "url": "http://**"
+        },
+        {
+          "url": "tauri://**"
+        }
+      ]
     },
     {
       "identifier": "core:event:allow-listen",
-      "allow": [{ "url": "http://**" }, { "url": "tauri://**" }]
+      "allow": [
+        {
+          "url": "http://**"
+        },
+        {
+          "url": "tauri://**"
+        }
+      ]
     },
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
@@ -29,11 +47,19 @@
     "opener:allow-reveal-item-in-dir",
     {
       "identifier": "opener:allow-open-path",
-      "allow": [{ "path": "**" }]
+      "allow": [
+        {
+          "path": "**"
+        }
+      ]
     },
     {
       "identifier": "opener:allow-reveal-item-in-dir",
-      "allow": [{ "path": "**" }]
+      "allow": [
+        {
+          "path": "**"
+        }
+      ]
     }
   ]
 }

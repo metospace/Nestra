@@ -3,18 +3,23 @@
 //! 规则（见 AGENTS.md）：
 //! - 内容去重保留原 ID（重复内容移到顶部，不重建 id）
 //! - 回写剪贴板时同步更新 LAST_HASH，抑制"把自己当成新记录"
-//! - 历史落盘 %APPDATA%/nestra/clip_history.json，上限 50 条
+//! - 历史只留内存，不落盘（避免密码/验证码写入磁盘）
 
 #![cfg(windows)]
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicUsize, Ordering};
+static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+pub fn set_enabled(enabled: bool) {
+    if let Some(text) = read_clipboard_text() { suppress_next_read(&text); }
+    ENABLED.store(enabled, Ordering::SeqCst);
+}
 use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 pub const CLIP_EVENT: &str = "nestra://clipboard-changed";
 const MAX_ITEMS: usize = 50;
@@ -42,34 +47,6 @@ fn now_label() -> String {
     local.format("%m-%d %H:%M").to_string()
 }
 
-fn history_file(app: &AppHandle) -> Option<std::path::PathBuf> {
-    Some(app.path().app_data_dir().ok()?.join("clip_history.json"))
-}
-
-/* 磁盘持久化 -------------------------------------------------------------- */
-
-fn save_to_disk(app: &AppHandle) {
-    let Ok(history) = HISTORY.lock() else { return };
-    let Some(file) = history_file(app) else { return };
-    if let Some(parent) = file.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(text) = serde_json::to_string(history.as_slice()) {
-        let _ = std::fs::write(&file, text);
-    }
-}
-
-fn load_from_disk(app: &AppHandle) {
-    let Some(file) = history_file(app) else { return };
-    let Ok(text) = std::fs::read_to_string(&file) else { return };
-    if let Ok(items) = serde_json::from_str::<Vec<ClipItem>>(&text) {
-        if let Ok(mut history) = HISTORY.lock() {
-            *history = items;
-            history.truncate(MAX_ITEMS);
-        }
-    }
-}
-
 /* 记录 / 查询 -------------------------------------------------------------- */
 
 fn record(app: &AppHandle, text: String) {
@@ -78,16 +55,16 @@ fn record(app: &AppHandle, text: String) {
         chrono::Utc::now().timestamp_millis(),
         ID_COUNTER.fetch_add(1, Ordering::Relaxed)
     );
-    let item = ClipItem { id, text, created_label: now_label() };
+    let mut item = ClipItem { id, text, created_label: now_label() };
 
     if let Ok(mut history) = HISTORY.lock() {
         // 内容去重：移到顶部但保留原 id（前端持有的引用不会失效）。
+        if let Some(existing) = history.iter().find(|existing| existing.text == item.text) { item.id = existing.id.clone(); }
         history.retain(|existing| existing.text != item.text);
         history.insert(0, item);
         history.truncate(MAX_ITEMS);
     }
 
-    save_to_disk(app);
     let _ = app.emit(CLIP_EVENT, ());
 }
 
@@ -110,7 +87,6 @@ pub fn remove_item(app: &AppHandle, id: &str) {
     if let Ok(mut history) = HISTORY.lock() {
         history.retain(|item| item.id != id);
     }
-    save_to_disk(app);
     let _ = app.emit(CLIP_EVENT, ());
 }
 
@@ -118,7 +94,6 @@ pub fn clear_all(app: &AppHandle) {
     if let Ok(mut history) = HISTORY.lock() {
         history.clear();
     }
-    save_to_disk(app);
     let _ = app.emit(CLIP_EVENT, ());
 }
 
@@ -189,9 +164,14 @@ pub fn write_clipboard_text(text: &str) -> Option<()> {
 
 /* 后台监控 ------------------------------------------------------------------ */
 
-/// 启动时调用：加载磁盘历史、初始化基准 hash、拉起轮询线程。
+/// 启动时调用：初始化基准 hash、拉起轮询线程。
+/// 剪贴板历史只留在内存，避免把密码/验证码写到磁盘。
 pub fn init(app: &AppHandle) {
-    load_from_disk(app);
+    if let Some(path) = crate::paths::state_file(app) {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            if let Ok(state) = serde_json::from_str::<serde_json::Value>(&text) { ENABLED.store(state["clipboardEnabled"].as_bool().unwrap_or(true), Ordering::SeqCst); }
+        }
+    }
 
     let baseline = read_clipboard_text().map(|text| hash_text(&text)).unwrap_or(0);
     if let Ok(mut last) = LAST_HASH.lock() {
@@ -205,6 +185,7 @@ pub fn init(app: &AppHandle) {
 fn monitor_loop(app: AppHandle) {
     loop {
         std::thread::sleep(Duration::from_millis(800));
+        if !ENABLED.load(Ordering::SeqCst) { continue; }
 
         let Some(text) = read_clipboard_text() else { continue };
         if text.trim().is_empty() || text.len() > 100_000 {

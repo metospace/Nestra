@@ -3,53 +3,111 @@
 
 mod clipboard;
 mod commands;
+mod configuration;
+#[cfg(windows)]
+mod everything;
+#[cfg(windows)]
+mod explorer;
+#[cfg(windows)]
+mod files;
 mod icons;
+#[cfg(windows)]
+mod instance;
+#[cfg(windows)]
+mod shell_menu;
 mod paths;
 mod scanner;
+mod session;
+#[cfg(windows)]
+mod startup;
+mod watch;
 
 #[cfg(windows)]
 mod win32;
+
+pub use session::STATE_CHANGED_EVENT;
 
 use std::str::FromStr;
 
 use tauri::{
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     tray::{TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager, WebviewWindow, WindowEvent,
+    Emitter, Manager, RunEvent, WebviewWindow, WindowEvent,
 };
 use tauri_plugin_global_shortcut::{
     Builder as ShortcutBuilder, GlobalShortcutExt, Shortcut, ShortcutState,
 };
 
 const HOTKEY_MANAGER: &str = "ctrl+alt+g";
+const HOTKEY_SEARCH: &str = "ctrl+alt+f";
+const HOTKEY_PAUSE: &str = "ctrl+alt+p";
 const TRAY_EVENT_NAME: &str = "nestra://tray";
 
 pub fn run() {
+    #[cfg(windows)]
+    let _instance = match instance::acquire() {
+        Ok(Some(guard)) => guard,
+        Ok(None) => return,
+        Err(error) => { eprintln!("{error}"); return; }
+    };
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(
             ShortcutBuilder::new()
                 .with_handler(|app, shortcut, event| {
-                    if event.state() == ShortcutState::Pressed
-                        && shortcut == &Shortcut::from_str(HOTKEY_MANAGER).expect("valid hotkey")
-                    {
-                        toggle_manager(app);
+                    if event.state() != ShortcutState::Pressed {
+                        return;
                     }
+                    let action = if shortcut == &Shortcut::from_str(HOTKEY_MANAGER).expect("valid hotkey") {
+                        "manager"
+                    } else if shortcut == &Shortcut::from_str(HOTKEY_SEARCH).expect("valid hotkey") {
+                        "search"
+                    } else { "pause" };
+                    let app = app.clone();
+                    tauri::async_runtime::spawn_blocking(move || match action {
+                        "manager" => toggle_manager(&app),
+                        "search" => session::open_search(&app),
+                        _ => { session::toggle_paused(&app); refresh_pause_label(&app); }
+                    });
                 })
                 .build(),
         )
         .setup(|app| {
             prepare_desktop_layer(app.handle())?;
+            session::apply_takeover(app.handle());
             clipboard::init(app.handle());
+            #[cfg(windows)]
+            {
+                watch::start(app.handle());
+                spawn_layer_watchdog(app.handle());
+            }
             register_hotkeys(app.handle())?;
             build_tray(app.handle())?;
+            #[cfg(windows)]
+            if let Some(manager) = app.get_webview_window("manager") {
+                if let Ok(hwnd) = manager.hwnd() { instance::mark_manager(hwnd.0 as isize); }
+            }
+            // Manual launches always have a discoverable entry. Autostart stays
+            // in the tray; it uses --background in the Run key.
+            if !std::env::args().any(|arg| arg == "--background") {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn_blocking(move || show_manager(&handle));
+            }
             Ok(())
-        })        .on_window_event(|window, event| match event {
+        })
+        .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {
-                // The desktop layer and the manager both hide instead of
-                // closing; Nestra only exits through the tray menu.
                 api.prevent_close();
-                let _ = window.hide();
+                // 桌面层就是桌面本身，不能随窗口关闭/Win+D 一起藏起来。
+                if window.label() == "desktop" {
+                    return;
+                }
+                let window = window.clone();
+                tauri::async_runtime::spawn_blocking(move || { let _ = window.hide(); });
+            }
+            WindowEvent::Focused(false) if window.label() == "search" => {
+                let window = window.clone();
+                tauri::async_runtime::spawn_blocking(move || { let _ = window.hide(); });
             }
             WindowEvent::Focused(true) if window.label() == "desktop" => {
                 #[cfg(windows)]
@@ -58,6 +116,26 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
+            commands::scan_applications,
+            commands::pick_file,
+            commands::set_clipboard_enabled,
+            configuration::backup_configuration,
+            configuration::list_configuration_backups,
+            configuration::export_configuration,
+            configuration::read_configuration,
+            configuration::list_storage_zones,
+            commands::scan_folder,
+            commands::show_manager,
+            commands::scan_paths,
+            commands::move_to_folder,
+            commands::list_file_moves,
+            commands::undo_file_move,
+            commands::recent_launches,
+            commands::set_mapping_watch_paths,
+            commands::search_mapped_folders,
+            commands::search_everything,
+            commands::list_displays,
+            commands::pick_folder,
             commands::scan_desktop,
             commands::resolve_icon_pairs,
             commands::open_entry,
@@ -70,28 +148,56 @@ pub fn run() {
             commands::clip_remove,
             commands::clip_clear,
             commands::quit_app,
+            commands::rename_entry,
+            commands::recycle_entry,
+            commands::create_zone,
+            commands::move_to_zone,
+            commands::move_paths_to_zone,
+            commands::move_to_desktop,
+            commands::dissolve_zone,
+            commands::rename_zone_dir,
+            commands::set_paused,
+            commands::get_paused,
+            commands::set_hide_native_icons,
+            commands::start_with_windows,
+            commands::set_start_with_windows,
+            commands::open_search,
+            commands::grant_desktop_input,
+            commands::release_desktop_input,
+            commands::show_shell_menu,
         ])
-        .run(tauri::generate_context!())
-        .expect("Nestra 启动失败");
+        .build(tauri::generate_context!())
+        .expect("Nestra 启动失败")
+        .run(|app, event| {
+            if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
+                session::prepare_exit();
+                let _ = app;
+            }
+        });
 }
 
-/// Sizes the layer to the primary monitor, pins it to the bottom of the
+/// Sizes the layer to the complete Windows virtual desktop, pins it to the bottom of the
 /// z-order and keeps it non-focusable on startup.
 fn prepare_desktop_layer(app: &tauri::AppHandle) -> tauri::Result<()> {
     let Some(layer) = app.get_webview_window("desktop") else {
         return Ok(());
     };
 
-    let monitor = match layer.current_monitor()? {
-        Some(active) => Some(active),
-        None => app.primary_monitor()?,
-    };
-    if let Some(monitor) = monitor {
-        let position = monitor.position();
-        let size = monitor.size();
-        layer.set_position(tauri::PhysicalPosition::new(position.x, position.y))?;
-        layer.set_size(tauri::PhysicalSize::new(size.width, size.height))?;
+    #[cfg(windows)]
+    {
+        let (x, y, width, height) = win32::virtual_desktop_bounds();
+        layer.set_position(tauri::PhysicalPosition::new(x, y))?;
+        layer.set_size(tauri::PhysicalSize::new(width, height))?;
     }
+
+    #[cfg(not(windows))]
+    if let Some(monitor) = app.primary_monitor()? {
+        layer.set_position(tauri::PhysicalPosition::new(monitor.position().x, monitor.position().y))?;
+        layer.set_size(tauri::PhysicalSize::new(monitor.size().width, monitor.size().height))?;
+    }
+
+    #[cfg(feature = "ui-test")]
+    layer.set_skip_taskbar(false)?;
 
     #[cfg(windows)]
     if let Ok(hwnd) = layer.hwnd() {
@@ -101,31 +207,99 @@ fn prepare_desktop_layer(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Explorer 重启/崩溃会销毁 Progman/WorkerW 宿主，我们 SetParent 上去的
+/// 桌面层窗口随之销毁。看门狗每 2s 检查一次，窗口没了就原地重建
+/// （前端挂载即重新 initialize，状态从磁盘恢复）。
+#[cfg(windows)]
+fn spawn_layer_watchdog(app: &tauri::AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        if !win32::layer_destroyed() {
+            continue;
+        }
+
+        // 旧句柄已死；Tauri 侧可能还挂着记录，先清掉。
+        if let Some(existing) = app.get_webview_window("desktop") {
+            let _ = existing.destroy();
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+
+        match recreate_desktop_layer(&app) {
+            Ok(_) => {
+                // 建成功才重置句柄表：失败时保留旧死句柄，下个 tick 继续重试。
+                win32::reset_layer_handle();
+                let _ = prepare_desktop_layer(&app);
+                // 新 Explorer 实例的桌面图标重新出现，按设置再隐藏。
+                session::apply_takeover(&app);
+            }
+            Err(error) => eprintln!("重建桌面层失败：{error}"),
+        }
+    });
+}
+
+#[cfg(windows)]
+fn recreate_desktop_layer(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::WebviewWindowBuilder;
+    WebviewWindowBuilder::new(
+        app,
+        "desktop",
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("Nestra 桌面层")
+    .decorations(false)
+    .transparent(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .maximizable(false)
+    .minimizable(false)
+    .focused(false)
+    .shadow(false)
+    // 必须 visible：隐藏创建的 WebView2 不注册 OLE DropTarget，收不到拖放。
+    .visible(true)
+    .build()?;
+    Ok(())
+}
+
 fn register_hotkeys(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let manager_shortcut = Shortcut::from_str(HOTKEY_MANAGER).expect("valid hotkey");
-    app.global_shortcut().register(manager_shortcut)?;
+    // 热键被占用时不能把整个应用带崩（本机 Ctrl+Alt+P 经常已被其他软件注册）。
+    let _ = app.global_shortcut().unregister_all();
+    for spec in [HOTKEY_MANAGER, HOTKEY_SEARCH, HOTKEY_PAUSE] {
+        let shortcut = Shortcut::from_str(spec).expect("valid hotkey");
+        if let Err(error) = app.global_shortcut().register(shortcut) {
+            eprintln!("跳过热键 {spec}：{error}");
+        }
+    }
     Ok(())
 }
 
 fn build_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let show = MenuItem::with_id(app, "manager", "显示管理器", true, None::<&str>)?;
+    let search = MenuItem::with_id(app, "search", "搜索文件与应用\tCtrl+Alt+F", true, None::<&str>)?;
+    let pause = MenuItem::with_id(app, "pause", "暂停整理，显示系统桌面\tCtrl+Alt+P", true, None::<&str>)?;
     let separator_1 = PredefinedMenuItem::separator(app)?;
     let note = MenuItem::with_id(app, "new-note", "新建便签", true, None::<&str>)?;
     let todo = MenuItem::with_id(app, "new-todo", "新建待办", true, None::<&str>)?;
     let clipboard_item = MenuItem::with_id(app, "new-clipboard", "新建剪贴板", true, None::<&str>)?;
+    let new_zone = MenuItem::with_id(app, "new-zone", "新建收纳区", true, None::<&str>)?;
     let separator_2 = PredefinedMenuItem::separator(app)?;
-    let refresh = MenuItem::with_id(app, "refresh", "刷新分类", true, None::<&str>)?;
+    let refresh = MenuItem::with_id(app, "refresh", "刷新桌面", true, None::<&str>)?;
     let separator_3 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "退出 Nestra", true, None::<&str>)?;
+
+    app.manage(PauseMenu(pause.clone()));
 
     let menu = Menu::with_items(
         app,
         &[
             &show,
+            &search,
+            &pause,
             &separator_1,
             &note,
             &todo,
             &clipboard_item,
+            &new_zone,
             &separator_2,
             &refresh,
             &separator_3,
@@ -146,7 +320,8 @@ fn build_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                 ..
             } = event
             {
-                toggle_manager(tray.app_handle());
+                let app = tray.app_handle().clone();
+                tauri::async_runtime::spawn_blocking(move || toggle_manager(&app));
             }
         })
         .build(app)?;
@@ -155,13 +330,39 @@ fn build_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
 }
 
 fn handle_tray_menu(app: &tauri::AppHandle, event: MenuEvent) {
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || handle_tray_action(&app, event));
+}
+
+fn handle_tray_action(app: &tauri::AppHandle, event: MenuEvent) {
     match event.id().as_ref() {
         "manager" => show_manager(app),
-        "new-note" => notify_frontend(app, "new-note"),
-        "new-todo" => notify_frontend(app, "new-todo"),
-        "new-clipboard" => notify_frontend(app, "new-clipboard"),
+        "search" => session::open_search(app),
+        "pause" => {
+            session::toggle_paused(app);
+            refresh_pause_label(app);
+        }
+        "new-note" => {
+            session::show_desktop_layer(app);
+            notify_frontend(app, "new-note");
+        }
+        "new-todo" => {
+            session::show_desktop_layer(app);
+            notify_frontend(app, "new-todo");
+        }
+        "new-clipboard" => {
+            session::show_desktop_layer(app);
+            notify_frontend(app, "new-clipboard");
+        }
+        "new-zone" => {
+            session::show_desktop_layer(app);
+            notify_frontend(app, "new-zone");
+        }
         "refresh" => notify_frontend(app, "refresh"),
-        "quit" => app.exit(0),
+        "quit" => {
+            session::prepare_exit();
+            app.exit(0);
+        }
         _ => {}
     }
 }
@@ -170,7 +371,7 @@ fn notify_frontend(app: &tauri::AppHandle, action: &str) {
     let _ = app.emit_to("desktop", TRAY_EVENT_NAME, action);
 }
 
-fn show_manager(app: &tauri::AppHandle) {
+pub(crate) fn show_manager(app: &tauri::AppHandle) {
     if let Some(manager) = manager_window(app) {
         let _ = manager.show();
         let _ = manager.unminimize();
@@ -190,4 +391,17 @@ fn toggle_manager(app: &tauri::AppHandle) {
 
 fn manager_window(app: &tauri::AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window("manager")
+}
+
+struct PauseMenu(MenuItem<tauri::Wry>);
+
+fn refresh_pause_label(app: &tauri::AppHandle) {
+    if let Some(item) = app.try_state::<PauseMenu>() {
+        let label = if session::is_paused() {
+            "恢复整理"
+        } else {
+            "暂停整理，显示系统桌面\tCtrl+Alt+P"
+        };
+        let _ = item.0.set_text(label);
+    }
 }

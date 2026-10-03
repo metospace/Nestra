@@ -18,17 +18,51 @@ pub fn icon_png_for(path: &str, cache_dir: Option<std::path::PathBuf>) -> Option
     let cache_key = cache_key(path);
     let cache_dir = cache_dir?;
     if crate::paths::ensure_dir(&cache_dir) {
+        cleanup_stale_once(&cache_dir);
+
         let cached = cache_dir.join(format!("{cache_key}.png"));
         if cached.exists() {
             return Some(cached.to_string_lossy().into_owned());
         }
 
+        // 失败也落盘一个 .fail 标记：shell: 入口等注定解析不了，
+        // 不做负缓存的话每次启动/扫描都要白跑一遍 COM 提取。
+        let failed = cache_dir.join(format!("{cache_key}.fail"));
+        if failed.exists() {
+            return None;
+        }
+
         if extract_to(path, &cached).is_some() {
             return Some(cached.to_string_lossy().into_owned());
         }
+        let _ = std::fs::write(&failed, b"");
     }
 
     None
+}
+
+/// 每个进程只跑一次：清掉 30 天前的 .png/.fail 缓存，防止无限增长。
+fn cleanup_stale_once(dir: &Path) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static CLEANED: AtomicBool = AtomicBool::new(false);
+    if CLEANED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let cutoff = std::time::SystemTime::now()
+        - std::time::Duration::from_secs(30 * 24 * 3600);
+    for entry in entries.flatten() {
+        let stale = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .is_some_and(|time| time < cutoff);
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn cache_key(path: &str) -> String {
@@ -61,14 +95,17 @@ fn extract_to(path: &str, destination: &Path) -> Option<()> {
         DeleteObject, GetDC, GetDIBits, ReleaseDC, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
         DIB_RGB_COLORS, HGDIOBJ,
     };
-    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
     use windows::Win32::UI::Shell::{
         SHCreateItemFromParsingName, IShellItemImageFactory, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY,
     };
 
     unsafe {
         // Commands run on worker threads; make sure COM is available.
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().ok()?;
+        struct ComGuard;
+        impl Drop for ComGuard { fn drop(&mut self) { unsafe { CoUninitialize(); } } }
+        let _com = ComGuard;
 
         let location = HSTRING::from(path);
         let factory: IShellItemImageFactory =

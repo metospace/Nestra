@@ -4,9 +4,11 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { ResizeDirection } from "@/composables/useSurfaceDrag";
 import { startMove, startResize } from "@/composables/useSurfaceDrag";
 import {
-  removeWidget,
+  confirmDialog,
+  nextZ,
   store,
   touchWidget,
+  setWidgetVisible,
 } from "@/stores/state";
 import {
   CLIPBOARD_CHANGED_EVENT,
@@ -36,7 +38,8 @@ function onHeaderPointerDown(event: PointerEvent): void {
 
 function bringToFrontSurface(): void {
   if (layout.value) {
-    layout.value.zIndex = Math.max(layout.value.zIndex + 1, 1000);
+    // 与面板共用同一个 zIndex 计数器，谁最后被点谁在最上。
+    layout.value.zIndex = nextZ();
     touchWidget();
   }
 }
@@ -63,7 +66,8 @@ function onResizePointerDown(event: PointerEvent, direction: ResizeDirection): v
 let todoCounter = 0;
 
 function addTodo(event: Event): void {
-  const input = event.target as HTMLInputElement;
+  const input = (event.target as HTMLFormElement).querySelector("input");
+  if (!input) return;
   const text = input.value.trim();
   if (!text) return;
 
@@ -116,12 +120,8 @@ function onRemove(item: ClipItem): void {
   void clipRemove(item.id);
 }
 
-function onClear(): void {
-  if (clipboardConfirm()) void clipClear();
-}
-
-function clipboardConfirm(): boolean {
-  return window.confirm("清空全部剪贴板历史？");
+async function onClear(): Promise<void> {
+  if (await confirmDialog("清空全部剪贴板历史？")) void clipClear();
 }
 
 onMounted(() => {
@@ -133,7 +133,9 @@ onMounted(() => {
   }
 });
 
-onBeforeUnmount(() => unlistenClip?.());
+const now = ref(new Date());
+const clockTimer = window.setInterval(() => { now.value = new Date(); }, 1000);
+onBeforeUnmount(() => { unlistenClip?.(); window.clearInterval(clockTimer); });
 
 function preview(text: string): string {
   return text.length > 120 ? `${text.slice(0, 120)}…` : text;
@@ -164,7 +166,7 @@ function preview(text: string): string {
         class="glyph-badge shrink-0"
         style="width: 24px; height: 24px; font-size: 12px"
       >
-        {{ widget.kind === "note" ? "签" : widget.kind === "todo" ? "办" : "剪" }}
+        {{ widget.kind === "note" ? "签" : widget.kind === "todo" ? "办" : widget.kind === "clock" ? "时" : "剪" }}
       </span>
 
       <input
@@ -176,7 +178,7 @@ function preview(text: string): string {
         @input="touchWidget"
       />
 
-      <button class="icon-button" title="删除小组件" @pointerdown.stop @click="removeWidget(widget.id)">
+      <button class="icon-button" title="隐藏小组件（可在控制中心恢复）" @pointerdown.stop @click="setWidgetVisible(widget.id, false)">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <path
             d="M4 4l8 8M12 4l-8 8"
@@ -267,11 +269,12 @@ function preview(text: string): string {
       </footer>
     </div>
 
+    <div v-else-if="widget.kind === 'clock'" class="clock-content"><strong>{{ now.toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'}) }}</strong><span>{{ now.toLocaleDateString('zh-CN', {month:'long',day:'numeric',weekday:'long'}) }}</span></div>
     <!-- 剪贴板历史 -->
     <div v-else class="flex min-h-0 flex-1 flex-col">
       <div class="flex items-center gap-2 px-3 pt-2">
         <span class="flex-1 text-[10.5px]" style="color: var(--nestra-text-faint)">
-          点按条目复制到剪贴板
+          {{ store.clipboardEnabled ? "点按条目复制到剪贴板" : "记录已暂停 · 现有历史仍可使用" }}
         </span>
         <button class="icon-button" title="清空历史" @click.stop="onClear">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -314,7 +317,7 @@ function preview(text: string): string {
     </div>
 
     <div
-      v-for="handle in resizeHandles"
+      v-for="handle in layout.locked ? [] : resizeHandles"
       :key="handle.direction"
       class="resize-handle"
       :class="handle.className"

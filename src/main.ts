@@ -1,18 +1,17 @@
 import { createApp } from "vue";
-import PrimeVue from "primevue/config";
-import Aura from "@primeuix/themes/aura";
+import { createRouter, createWebHashHistory } from "vue-router";
+import ui from "@nuxt/ui/vue-plugin";
+import { addCollection } from "@iconify/vue";
+import { icons } from "@iconify-json/lucide";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import App from "./App.vue";
 import "./style.css";
 
 document.body.dataset.window = getCurrentWebviewWindow().label;
 
-createApp(App)
-  .use(PrimeVue, {
-    theme: { preset: Aura },
-    options: { darkModeSelector: ".dark" },
-  })
-  .mount("#app");
+addCollection(icons);
 
-// The desktop layer participates in the dark token scheme everywhere.
-document.documentElement.classList.add("dark");
+createApp(App)
+  .use(createRouter({history:createWebHashHistory(),routes:[{path:"/:pathMatch(.*)*",component:{render:()=>null}}]}))
+  .use(ui)
+  .mount("#app");

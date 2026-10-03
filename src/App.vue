@@ -2,11 +2,16 @@
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import DesktopLayer from "@/desktop/DesktopLayer.vue";
 import ManagerApp from "@/manager/ManagerApp.vue";
+import UApp from "@nuxt/ui/components/App.vue";
+import SearchWindow from "@/features/SearchWindow.vue";
 
 const label = getCurrentWebviewWindow().label;
 </script>
 
 <template>
-  <ManagerApp v-if="label === 'manager'" />
-  <DesktopLayer v-else />
+  <UApp :toaster="null">
+    <ManagerApp v-if="label === 'manager'" />
+    <SearchWindow v-else-if="label === 'search'" />
+    <DesktopLayer v-else />
+  </UApp>
 </template>
