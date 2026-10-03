@@ -122,6 +122,7 @@ export const store = reactive({
   paused: false,
   searchOpen: false,
   searchQuery: "",
+  surfaceSettingsKey: "",
   hideNativeIcons: false,
   startWithWindows: false,
 });
@@ -1412,6 +1413,25 @@ export function setSurfaceAppearance(key: string, patch: NonNullable<PanelLayout
   if (!layout) return;
   if (patch === null) delete layout.appearance;
   else layout.appearance = { ...layout.appearance, ...patch };
+  scheduleSave();
+}
+
+export function openSurfaceSettings(key: string): void {
+  if (!store.panelLayouts[key]) return;
+  store.surfaceSettingsKey = key;
+  scheduleHitRectSync();
+}
+
+export function useGlobalAppearanceForAll(): void {
+  for (const layout of Object.values(store.panelLayouts)) delete layout.appearance;
+  scheduleSave();
+}
+
+export function clearSurfaceBackground(key: string): void {
+  const layout = store.panelLayouts[key];
+  if (!layout?.appearance) return;
+  delete layout.appearance.backgroundColor;
+  if (!Object.keys(layout.appearance).length) delete layout.appearance;
   scheduleSave();
 }
 

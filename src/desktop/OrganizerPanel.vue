@@ -6,6 +6,7 @@ import type { ResizeDirection } from "@/composables/useSurfaceDrag";
 import { startMove, startResize } from "@/composables/useSurfaceDrag";
 import {
   bringToFront,
+  openSurfaceSettings,
   dropTargetId,
   foldItem,
   moveItem,
@@ -62,7 +63,7 @@ const variables = computed(() => surfaceVariables(layout.value!, store.appearanc
 const searchVisible = ref(false), searchInput = ref<HTMLInputElement | null>(null);
 const more = ref<{x:number;y:number}|null>(null);
 function toggleMore(event:MouseEvent){more.value=more.value?null:{x:Math.max(8,Math.min(event.clientX-200,window.innerWidth-250)),y:Math.max(8,Math.min(event.clientY+8,window.innerHeight-370))};}
-function settings(){more.value=null;void showManager('surfaces',props.panel.key);}
+function settings(){more.value=null;openSurfaceSettings(props.panel.key);}
 async function toggleSearch(){searchVisible.value=!searchVisible.value;if(searchVisible.value){await nextTick();searchInput.value?.focus();}else localQuery.value='';}
 const selected = computed(()=>store.selectionPanel===panel.value.key?selectedEntries.value.filter(e=>visibleEntries.value.some(v=>v.id===e.id)):[]);
 const moveTarget=ref(''), batchBusy=ref(false);
@@ -210,10 +211,9 @@ function onRefresh(): void {
     @dragleave="onDragLeave"
   >
     <header class="panel-header organizer-heading select-none" @pointerdown="onHeaderPointerDown">
-      <span class="organizer-symbol"><UIcon :name="tabModel?'i-lucide-panels-top-left':'i-lucide-folder'"/></span>
       <div class="organizer-title"><h2>{{tabModel?.name??panel.title}}</h2><small>{{items.length}} 项 · {{writable?'真实收纳':activeGroup?.mappedPath?'文件夹映射':'浏览视图'}}</small></div>
       <button class="icon-button" :class="{'is-active':searchVisible}" title="搜索此栏" aria-label="搜索此栏" @pointerdown.stop @click="toggleSearch"><UIcon name="i-lucide-search"/></button>
-      <button class="icon-button" title="此栏样式与布局" aria-label="此栏样式与布局" @pointerdown.stop @click="settings"><UIcon name="i-lucide-sliders-horizontal"/></button>
+      <button class="icon-button" data-surface-settings-trigger title="此栏样式与布局" aria-label="此栏样式与布局" @pointerdown.stop @click="settings"><UIcon name="i-lucide-sliders-horizontal"/></button>
       <button class="icon-button" title="更多操作" aria-label="更多操作" @pointerdown.stop @click="toggleMore"><UIcon name="i-lucide-ellipsis"/></button>
     </header>
     <div v-if="tabModel" class="flex shrink-0 gap-1 overflow-x-auto px-2 pt-2" role="tablist" :aria-label="tabModel?.name ?? '收纳区标签页'">

@@ -9,6 +9,7 @@ import type { ResizeDirection } from "@/composables/useSurfaceDrag";
 import { startMove, startResize } from "@/composables/useSurfaceDrag";
 import {
   bringToFront,
+  openSurfaceSettings,
   cachedIconUrl,
   confirmDialog,
   LAUNCHER_PANEL_KEY,
@@ -103,9 +104,9 @@ function onResizePointerDown(event: PointerEvent, direction: ResizeDirection): v
     @pointerdown="bringToFront(LAUNCHER_PANEL_KEY)"
   >
     <header class="panel-header organizer-heading select-none" @pointerdown="onHeaderPointerDown">
-      <span class="organizer-symbol"><UIcon name="i-lucide-command"/></span><div class="organizer-title"><h2>快捷启动</h2><small>{{items.length}} 个入口 · 原文件保持原位</small></div>
+      <div class="organizer-title"><h2>快捷启动</h2><small>{{items.length}} 个入口 · 原文件保持原位</small></div>
       <button class="icon-button" title="管理快捷入口" aria-label="管理快捷入口" @pointerdown.stop @click="showManager('launcher')"><UIcon name="i-lucide-plus"/></button>
-      <button class="icon-button" title="快捷启动样式与布局" aria-label="快捷启动样式与布局" @pointerdown.stop @click="showManager('surfaces',LAUNCHER_PANEL_KEY)"><UIcon name="i-lucide-sliders-horizontal"/></button>
+      <button class="icon-button" data-surface-settings-trigger title="快捷启动样式与布局" aria-label="快捷启动样式与布局" @pointerdown.stop @click="openSurfaceSettings(LAUNCHER_PANEL_KEY)"><UIcon name="i-lucide-sliders-horizontal"/></button>
       <button class="icon-button" title="隐藏快捷启动（控制中心可恢复）" aria-label="隐藏快捷启动" @pointerdown.stop @click="setPanelVisible(LAUNCHER_PANEL_KEY,false)"><UIcon name="i-lucide-eye-off"/></button>
     </header>
     <div v-if="store.launchCollections.length" class="launcher-collections"><button v-for="collection in store.launchCollections" :key="collection.id" :disabled="collectionBusy" :title="`打开集合：${collection.name}`" @click="launchCollection(collection.entryIds)"><UIcon name="i-lucide-layers-2"/>{{collection.name}}</button></div>

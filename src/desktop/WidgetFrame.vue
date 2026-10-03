@@ -162,13 +162,6 @@ function preview(text: string): string {
       :style="{ cursor: 'grab', gap: '8px' }"
       @pointerdown="onHeaderPointerDown"
     >
-      <span
-        class="glyph-badge shrink-0"
-        style="width: 24px; height: 24px; font-size: 12px"
-      >
-        {{ widget.kind === "note" ? "签" : widget.kind === "todo" ? "办" : widget.kind === "clock" ? "时" : "剪" }}
-      </span>
-
       <input
         v-model="widget.title"
         class="min-w-0 flex-1 bg-transparent text-[13px] font-semibold outline-none"

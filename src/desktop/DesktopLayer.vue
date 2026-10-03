@@ -7,6 +7,7 @@ import Button from "@/ui/Button.vue";
 import { itemDrag, type DragAction } from "@/composables/useItemDrag";
 import { grantDesktopInput, releaseDesktopInput, showManager } from "@/lib/tauri";
 import ConfirmDialog from "./ConfirmDialog.vue";
+import SurfaceSettings from "./SurfaceSettings.vue";
 import LauncherPanel from "./LauncherPanel.vue";
 import OrganizerPanel from "./OrganizerPanel.vue";
 import SearchOverlay from "./SearchOverlay.vue";
@@ -69,7 +70,7 @@ function onDesktopDrop(event: DragEvent): void {
 
 /** 层窗口带 WS_EX_NOACTIVATE、永不激活——任何输入控件拿到 DOM 焦点时，
  * 都要向前台线程"借"键盘焦点，离开输入控件即归还。 */
-const TEXT_INPUT_SELECTOR = "input, textarea, [contenteditable]";
+const TEXT_INPUT_SELECTOR = "input, textarea, select, [contenteditable]";
 let focusRevision = 0;
 
 async function focusTextControl(el: HTMLElement): Promise<void> {
@@ -235,6 +236,7 @@ onBeforeUnmount(() => {
       />
 
       <SearchOverlay />
+      <SurfaceSettings v-if="store.surfaceSettingsKey" :key="store.surfaceSettingsKey" :panel-key="store.surfaceSettingsKey" />
       <ConfirmDialog />
     </template>
 

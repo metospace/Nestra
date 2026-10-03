@@ -663,7 +663,6 @@ button{cursor:pointer}button:disabled{cursor:default}
 
 /* Desktop surfaces: quiet heading, contextual tools, independent presentation. */
 .organizer-heading{gap:10px;padding:14px 14px 12px;min-height:62px;border-bottom:0}
-.organizer-symbol{width:32px;height:32px;display:grid;place-items:center;background:var(--nestra-hover);border-radius:9px;color:var(--nestra-accent);font-size:19px;flex-shrink:0}
 .organizer-title{flex:1;min-width:0}.organizer-title h2{font-size:13px;font-weight:600;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.organizer-title small{display:block;font-size:10px;color:var(--nestra-text-faint);margin-top:3px}
 .organizer-heading .icon-button{width:28px;height:28px;font-size:15px;flex-shrink:0}.organizer-heading .icon-button:hover,.organizer-heading .is-active{background:var(--nestra-hover);color:var(--nestra-accent)}
 .organizer-search{display:flex;align-items:center;gap:4px;margin:0 12px 8px;border:1px solid var(--nestra-line);border-radius:8px;padding:3px 5px}.organizer-search input{background:transparent;border:0;outline:0;min-width:0;flex:1;font-size:12px;padding:5px}

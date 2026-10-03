@@ -1,6 +1,14 @@
 import type { AppearanceSettings, PanelLayout } from "@/types";
 
 export const cornerRadii = { square: 2, compact: 8, standard: 14, rounded: 22 };
+
+export function settingsPosition(layout: Pick<PanelLayout, 'x' | 'y' | 'width'>, viewport: {width:number;height:number}) {
+  const margin=12, width=Math.min(360,Math.max(1,viewport.width-margin*2));
+  const maxHeight=Math.max(1,viewport.height-margin*2), height=Math.min(580,maxHeight);
+  const right=layout.x+layout.width+10;
+  const left=right+width<=viewport.width-margin ? right : layout.x-width-10;
+  return {left:Math.max(margin,Math.min(left,viewport.width-width-margin)),top:Math.max(margin,Math.min(layout.y,viewport.height-height-margin)),width,maxHeight};
+}
 export function surfaceAppearance(layout: PanelLayout, global: AppearanceSettings) {
   return { ...global, ...layout.appearance };
 }
