@@ -2,7 +2,6 @@
 
 #![cfg(windows)]
 
-use tauri::{AppHandle, Manager, WebviewWindow};
 use windows::core::{PCSTR, PCWSTR};
 use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
@@ -23,17 +22,18 @@ const CMD_LAUNCHER: u32 = 0x7002;
 const CMD_FOLD: u32 = 0x7003;
 const CMD_RENAME: u32 = 0x7004;
 
-pub fn show(
-    app: &AppHandle,
-    path: &str,
-    screen_x: i32,
-    screen_y: i32,
-    to_desktop: bool,
-    in_launcher: bool,
-    can_fold: bool,
-    can_rename: bool,
-) -> Result<String, String> {
-    let hwnd = desktop_hwnd(app)?;
+pub fn show_native(request: &crate::shell_worker::MenuRequest) -> Result<String, String> {
+    use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, SetForegroundWindow, ShowWindow, WS_EX_TOOLWINDOW, WS_POPUP, SW_SHOWNOACTIVATE};
+    // Own the popup in this process. A failed extension must never subclass or
+    // destroy the organizer's desktop HWND.
+    let hwnd = unsafe { CreateWindowExW(WS_EX_TOOLWINDOW, windows::core::w!("STATIC"),
+        windows::core::w!("Nestra Shell"), WS_POPUP, 0, 0, 0, 0, None, None, None, None) }
+        .map_err(|e| e.to_string())?;
+    struct Owner(HWND);
+    impl Drop for Owner { fn drop(&mut self) { unsafe { let _ = DestroyWindow(self.0); } } }
+    let _owner = Owner(hwnd);
+    let crate::shell_worker::MenuRequest { path, x: screen_x, y: screen_y, to_desktop, in_launcher, can_fold, can_rename } = request;
+    let (screen_x, screen_y) = (*screen_x, *screen_y);
     let (x, y) = if screen_x == 0 && screen_y == 0 {
         let mut pt = POINT::default();
         unsafe {
@@ -44,12 +44,13 @@ pub fn show(
         (screen_x, screen_y)
     };
 
-    unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-    }
+    unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().map_err(|e| e.to_string())?; }
+    struct ComGuard;
+    impl Drop for ComGuard { fn drop(&mut self) { unsafe { windows::Win32::System::Com::CoUninitialize(); } } }
+    let _com = ComGuard;
 
     let item: IShellItem = unsafe {
-        SHCreateItemFromParsingName(&windows::core::HSTRING::from(path), None)
+        SHCreateItemFromParsingName(&windows::core::HSTRING::from(path.as_str()), None)
             .map_err(|error| format!("无法打开 Shell 项目：{error}"))?
     };
     let menu: IContextMenu = unsafe {
@@ -74,26 +75,28 @@ pub fn show(
 
     unsafe {
         let _ = AppendMenuW(popup, MF_SEPARATOR, 0, PCWSTR::null());
-        if to_desktop {
+        if *to_desktop {
             let _ = AppendMenuW(popup, MF_STRING, CMD_TO_DESKTOP as usize, windows::core::w!("放回桌面"));
         }
-        let launcher_label = if in_launcher {
+        let launcher_label = if *in_launcher {
             windows::core::w!("移出快捷启动")
         } else {
             windows::core::w!("添加到快捷启动")
         };
         let _ = AppendMenuW(popup, MF_STRING, CMD_LAUNCHER as usize, launcher_label);
-        if can_fold {
+        if *can_fold {
             let _ = AppendMenuW(popup, MF_STRING, CMD_FOLD as usize, windows::core::w!("收入折叠"));
         }
         // Explorer 自带"重命名"会在被隐藏的 SysListView32 上弹出不可见的编辑框，
         // 因此追加我们自己的入口，交给前端的可见重命名弹窗。
-        if can_rename {
+        if *can_rename {
             let _ = AppendMenuW(popup, MF_STRING, CMD_RENAME as usize, windows::core::w!("重命名(Nestra)"));
         }
     }
 
     let selected = unsafe {
+        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        let _ = SetForegroundWindow(hwnd);
         TrackPopupMenuEx(
             popup,
             TPM_RIGHTBUTTON.0 | TPM_RETURNCMD.0,
@@ -144,12 +147,4 @@ pub fn show(
             .map_err(|error| format!("无法执行菜单命令：{error}"))?;
     }
     Ok("invoked".into())
-}
-
-fn desktop_hwnd(app: &AppHandle) -> Result<HWND, String> {
-    let window: WebviewWindow = app
-        .get_webview_window("desktop")
-        .ok_or_else(|| "找不到桌面窗口".to_string())?;
-    let hwnd = window.hwnd().map_err(|error| error.to_string())?;
-    Ok(HWND(hwnd.0 as _))
 }

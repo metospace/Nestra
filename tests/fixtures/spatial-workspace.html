@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nestra · 空间界面验收</title></head><body data-window="manager"><div id="app"></div>
+<script type="module">
+// Run the production manager against synthetic, memory-only IPC. No native disk/file calls.
+const layout=(x,y,width=336,height=432)=>({x,y,width,height,zIndex:10,visible:true,monitorId:'preview'});
+const groups=[{id:'project',name:'项目资料',dirName:'项目资料',sourceKind:'zone'},{id:'inbox',name:'待处理',dirName:'待处理',sourceKind:'zone'}];
+const entries=groups.flatMap((group,index)=>(index?['邮件附件','待整理文档','截图.png']:['设计稿','项目文档','参考图片','会议记录','产品方案','交付文件','需求截图.png','版本说明.txt']).map((name,i)=>({id:`file:C:\\preview\\${group.name}\\${name}`,name,path:`C:\\preview\\${group.name}\\${name}`,target:'',kind:i<2?'folder':'file',launchKind:'filesystem',sourceLabel:group.name,glyph:'文',isHidden:false,isFresh:false,isApplication:false,iconPath:null,canManage:true,zone:group.dirName})));
+let disk={schemaVersion:2,coexistMigrated:true,panelLayouts:{'zone:project':layout(80,120),'zone:inbox':layout(480,120),'system:launcher':{...layout(880,120),visible:false}},customGroups:groups,tabGroups:[],foldedItems:{},itemOrders:{},launcherIds:[],appearance:{theme:'light',surfaceMaterial:'clear',cornerStyle:'standard',borderStyle:'subtle',panelOpacity:.95},widgets:[{id:'note',kind:'note',title:'便签',content:'周五前完成设计评审\n记得备份项目资料',todos:[],layout:layout(600,120,270,180),createdAt:1},{id:'todo',kind:'todo',title:'今天的待办',content:'',todos:[{id:'1',text:'整理项目文件',completed:true},{id:'2',text:'确认新版界面',completed:false},{id:'3',text:'准备评审资料',completed:false}],layout:layout(600,330,270,220),createdAt:1}],startWithWindows:false,hideNativeIcons:false,clipboardEnabled:true};
+let callbackId=0;const callbacks=new Map();
+const flags=new URLSearchParams(location.search),pendingSearch=[];
+if(flags.has('searchHold')){
+ const button=document.createElement('button');button.textContent='补齐示例搜索结果';button.style='position:fixed;bottom:8px;right:20px;z-index:9800;padding:8px;background:white;color:black';
+ button.onclick=()=>{for(const resolve of pendingSearch.splice(0))resolve({available:true,message:'示例异步索引已补齐',total:1,entries:[{...entries[0],id:'file:D:\\fixture\\项目',path:'D:\\fixture\\项目',name:'项目',zone:null}]});};document.body.append(button);
+}
+if(flags.has('inspect')){const output=document.createElement('output');output.setAttribute('aria-label','桌面查看验收记录');output.style='position:fixed;bottom:8px;left:20px;z-index:9800;background:white;color:black;font-size:11px;padding:8px';document.body.append(output);}
+if(new URLSearchParams(location.search).has('empty')){disk.customGroups=[];disk.widgets=[];disk.panelLayouts={'system:launcher':{...layout(880,120),visible:false}};entries.splice(0);}
+window.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener:()=>{}};
+window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'manager'},currentWebview:{label:'manager'}},transformCallback:fn=>{callbacks.set(++callbackId,fn);return callbackId;},unregisterCallback:id=>callbacks.delete(id),convertFileSrc:path=>path,invoke:async(command,args={})=>{
+  if(command==='load_state')return structuredClone(disk);
+  if(command==='save_state'){disk=structuredClone(args.state);document.querySelector('[aria-label="桌面查看验收记录"]')?.replaceChildren(`已保存：x=${disk.panelLayouts['zone:project']?.x}, y=${disk.panelLayouts['zone:project']?.y}`);return;}
+  if(command==='scan_desktop')return structuredClone(entries);
+  if(command==='scan_paths')return structuredClone(entries.filter(entry=>args.paths?.includes(entry.path)));
+  if(command==='list_displays')return [{id:'preview',name:'主显示器',x:0,y:0,width:1920,height:1080,isPrimary:true}];
+  if(command==='resolve_icon_pairs')return {};
+  if(['scan_applications','scan_folder','recent_launches','list_file_moves','list_configuration_backups','list_storage_zones','search_mapped_folders','clip_load'].includes(command))return [];
+  if(command==='search_everything'){if(flags.has('searchHold')&&args.query?.trim())return new Promise(resolve=>pendingSearch.push(resolve));return {available:false,message:'验收环境 · 本地内容搜索',total:0,entries:[]};}
+  if(command==='plugin:window|hide'){document.querySelector('[aria-label="桌面查看验收记录"]')?.append(' · 已调用隐藏管理窗口');return;}
+  if(['start_with_windows','get_paused'].includes(command))return false;
+  if(command==='plugin:event|listen')return ++callbackId;
+  if(['set_mapping_watch_paths','set_clipboard_enabled','set_hit_rects','set_hide_native_icons','release_desktop_input','grant_desktop_input','open_search','set_paused','set_start_with_windows'].includes(command)||command.startsWith('plugin:event|')||command.startsWith('plugin:window|'))return;
+  throw Error(`Preview blocks native operation: ${command}`);
+}};
+await import('/src/main.ts');
+</script></body></html>

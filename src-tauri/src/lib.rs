@@ -15,6 +15,8 @@ mod icons;
 mod instance;
 #[cfg(windows)]
 mod shell_menu;
+#[cfg(windows)]
+mod shell_worker;
 mod paths;
 mod scanner;
 mod session;
@@ -26,6 +28,8 @@ mod watch;
 mod win32;
 
 pub use session::STATE_CHANGED_EVENT;
+#[cfg(windows)]
+pub use shell_worker::run_if_requested as run_shell_worker;
 
 use std::str::FromStr;
 
@@ -213,9 +217,21 @@ fn prepare_desktop_layer(app: &tauri::AppHandle) -> tauri::Result<()> {
 #[cfg(windows)]
 fn spawn_layer_watchdog(app: &tauri::AppHandle) {
     let app = app.clone();
-    std::thread::spawn(move || loop {
+    std::thread::spawn(move || {
+      let mut bounds = win32::virtual_desktop_bounds();
+      loop {
         std::thread::sleep(std::time::Duration::from_secs(2));
         if !win32::layer_destroyed() {
+            let current = win32::virtual_desktop_bounds();
+            if current != bounds {
+                // Do not subclass the HWND again when only its bounds change.
+                if let Some(layer) = app.get_webview_window("desktop") {
+                    let (x, y, width, height) = current;
+                    let _ = layer.set_position(tauri::PhysicalPosition::new(x, y));
+                    let _ = layer.set_size(tauri::PhysicalSize::new(width, height));
+                }
+                bounds = current;
+            }
             continue;
         }
 
@@ -230,11 +246,13 @@ fn spawn_layer_watchdog(app: &tauri::AppHandle) {
                 // 建成功才重置句柄表：失败时保留旧死句柄，下个 tick 继续重试。
                 win32::reset_layer_handle();
                 let _ = prepare_desktop_layer(&app);
+                bounds = win32::virtual_desktop_bounds();
                 // 新 Explorer 实例的桌面图标重新出现，按设置再隐藏。
                 session::apply_takeover(&app);
             }
             Err(error) => eprintln!("重建桌面层失败：{error}"),
         }
+      }
     });
 }
 

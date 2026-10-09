@@ -40,6 +40,8 @@ export interface PanelLayout {
   height: number;
   zIndex: number;
   visible: boolean;
+  /** One-time upgrade to a hidden launcher; later explicit visibility is retained. */
+  launcherVisibilityMigrated?: boolean;
   viewMode?: "grid" | "list";
   columns?: number;
   density?: "compact" | "comfortable";
@@ -49,13 +51,16 @@ export interface PanelLayout {
   /** Missing fields inherit the global desktop appearance. */
   appearance?: Partial<Omit<AppearanceSettings, "theme">> & { backgroundColor?: string };
   monitorId?: string;
+  /** Monitor origin when this placement was set (virtual desktop coordinates). */
+  monitorBounds?: { x: number; y: number };
   locked?: boolean;
   /** Saved assignment while its monitor is disconnected. */
-  displacedFrom?: { monitorId: string; x: number; y: number; width: number; height: number };
+  displacedFrom?: { monitorId: string; x: number; y: number; width: number; height: number; monitorBounds?: { x: number; y: number } };
 }
 
 export interface DisplayInfo {
   id: string;
+  legacyId?: string;
   name: string;
   x: number;
   y: number;
@@ -88,6 +93,8 @@ export interface CustomGroupDefinition {
 }
 
 export interface AppearanceSettings {
+  /** One-time visual upgrade; later theme/material choices remain user-owned. */
+  styleVersion?: number;
   theme?: "light" | "dark";
   surfaceMaterial: SurfaceMaterial;
   cornerStyle: CornerStyle;

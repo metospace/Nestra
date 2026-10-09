@@ -8,7 +8,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetPropW, SetPropW, SetForegroundWindow, ShowWindow, SW_RESTORE,
 };
 
+#[cfg(not(feature = "ui-test"))]
 const MANAGER_MARKER: windows::core::PCWSTR = w!("Nestra.ManagerWindow");
+#[cfg(feature = "ui-test")]
+const MANAGER_MARKER: windows::core::PCWSTR = w!("Nestra.UiTest.ManagerWindow");
+#[cfg(not(feature = "ui-test"))]
+const INSTANCE_NAME: windows::core::PCWSTR = w!("Local\\Nestra.DesktopOrganizer.Instance");
+#[cfg(feature = "ui-test")]
+const INSTANCE_NAME: windows::core::PCWSTR = w!("Local\\Nestra.DesktopOrganizer.UiTest.Instance");
 
 pub struct InstanceGuard(HANDLE);
 impl Drop for InstanceGuard {
@@ -17,7 +24,7 @@ impl Drop for InstanceGuard {
 
 pub fn acquire() -> Result<Option<InstanceGuard>, String> {
     unsafe {
-        let handle = CreateMutexW(None, false, w!("Local\\Nestra.DesktopOrganizer.Instance"))
+        let handle = CreateMutexW(None, false, INSTANCE_NAME)
             .map_err(|error| format!("无法创建应用实例锁：{error}"))?;
         let existing = GetLastError() == ERROR_ALREADY_EXISTS;
         let guard = InstanceGuard(handle);

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
 import { test } from "node:test";
+import { loadMoveReports } from './helpers/move-reports.mjs';
 const source = readFileSync(new URL("../src/stores/state.ts", import.meta.url), "utf8");
 const ast = ts.createSourceFile("state.ts", source, ts.ScriptTarget.Latest, true);
 const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "dropPaths");
@@ -10,7 +11,7 @@ const code = ts.transpile(fn.getText(ast).replace(/^export /, ""), { target: ts.
 function setup() {
   const moves = [], messages = [], migrations = [];
   const store = { customGroups: [{id: "zone", dirName: "Documents", name: "Documents"}], entries: [{id: "old", path: "C:/Desktop/test.lnk", target: "C:/Program Files/App/app.exe"}], launcherIds: [], launcherReferences: {} };
-  const context = vm.createContext({ store,
+  const context = vm.createContext({ store, ...loadMoveReports(),
     performFileChange: fn => fn(),
     moveToZone: async (path, dir) => { moves.push({path, dir}); return "C:/Desktop/.nestra/Documents/test.lnk"; },
     remappedId: (_entry, path) => `new:${path}`,

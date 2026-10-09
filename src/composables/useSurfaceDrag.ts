@@ -2,6 +2,8 @@
  * Pointer-capture based so the gesture survives fast moves. */
 
 import type { PanelLayout } from "@/types";
+import { containSurface, displayAtPoint } from "@/lib/layout";
+import { flushState, store } from "@/stores/state";
 
 export type ResizeDirection =
   | "n" | "s" | "e" | "w"
@@ -15,18 +17,16 @@ interface SurfaceConstraints {
 const DEFAULT_MIN_W = 260;
 const DEFAULT_MIN_H = 170;
 
-function viewport(): { width: number; height: number } {
-  return {
-    width: window.innerWidth,
-    height: window.innerHeight,
-  };
+function screens() {
+  return store.displays.length ? store.displays : [{ id: 'viewport', name: '当前屏幕', x: 0, y: 0,
+    width: window.innerWidth, height: window.innerHeight, isPrimary: true }];
 }
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-/** Moves the surface by header drags; clamped to stay reachable. */
+/** Moves the whole surface inside a connected display. */
 export function startMove(
   event: PointerEvent,
   layout: PanelLayout,
@@ -37,19 +37,21 @@ export function startMove(
   const originY = event.clientY;
   const startX = layout.x;
   const startY = layout.y;
-  let latestX = startX;
-  let latestY = startY;
+  const width = layout.width ?? (constraints.minWidth ?? DEFAULT_MIN_W);
+  const height = layout.height ?? (constraints.minHeight ?? DEFAULT_MIN_H);
 
   const onMove = (move: PointerEvent) => {
+    if (move.pointerId !== event.pointerId) return;
     const dx = move.clientX - originX;
     const dy = move.clientY - originY;
-    const { width, height } = viewport();
-    const w = layout.width ?? (constraints.minWidth ?? DEFAULT_MIN_W);
-
-    latestX = clamp(startX + dx, -w + 120, width - 120);
-    latestY = clamp(startY + dy, 0, height - 48);
-    layout.x = latestX;
-    layout.y = latestY;
+    const display = displayAtPoint(move.clientX, move.clientY, screens());
+    Object.assign(layout, { x: startX + dx, y: startY + dy, width, height });
+    containSurface(layout, display);
+    if (display.id !== 'viewport') {
+      layout.monitorId = display.id;
+      layout.monitorBounds = { x: display.x, y: display.y };
+    }
+    delete layout.displacedFrom;
   };
 
   attachGesture(event, onMove);
@@ -65,28 +67,29 @@ export function startResize(
   if (event.button !== 0 || layout.locked) return;
   const originX = event.clientX;
   const originY = event.clientY;
+  const display = displayAtPoint(layout.x + layout.width / 2, layout.y + layout.height / 2, screens());
+  containSurface(layout, display);
   const start = { ...layout };
   const minWidth = constraints.minWidth ?? DEFAULT_MIN_W;
   const minHeight = constraints.minHeight ?? DEFAULT_MIN_H;
-  const { width: viewW, height: viewH } = viewport();
 
   const apply = () => {
     const dx = latestDx();
     const dy = latestDy();
 
     if (direction.includes("e")) {
-      layout.width = clamp(start.width + dx, minWidth, viewW - start.x);
+      layout.width = clamp(start.width + dx, Math.min(minWidth, display.x + display.width - start.x), display.x + display.width - start.x);
     }
     if (direction.includes("s")) {
-      layout.height = clamp(start.height + dy, minHeight, viewH - start.y);
+      layout.height = clamp(start.height + dy, Math.min(minHeight, display.y + display.height - start.y), display.y + display.height - start.y);
     }
     if (direction.includes("w")) {
-      const width = clamp(start.width - dx, minWidth, start.x + start.width);
+      const width = clamp(start.width - dx, Math.min(minWidth, start.x + start.width - display.x), start.x + start.width - display.x);
       layout.width = width;
       layout.x = start.x + start.width - width;
     }
     if (direction.includes("n")) {
-      const height = clamp(start.height - dy, minHeight, start.y + start.height);
+      const height = clamp(start.height - dy, Math.min(minHeight, start.y + start.height - display.y), start.y + start.height - display.y);
       layout.height = height;
       layout.y = start.y + start.height - height;
     }
@@ -98,9 +101,15 @@ export function startResize(
   const latestDy = () => currentDy;
 
   const onMove = (move: PointerEvent) => {
+    if (move.pointerId !== event.pointerId) return;
     currentDx = move.clientX - originX;
     currentDy = move.clientY - originY;
     apply();
+    if (display.id !== 'viewport') {
+      layout.monitorId = display.id;
+      layout.monitorBounds = { x: display.x, y: display.y };
+    }
+    delete layout.displacedFrom;
   };
 
   attachGesture(event, onMove);
@@ -112,7 +121,10 @@ function attachGesture(
 ): void {
   const target = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
   const pointerId = event.pointerId;
+  let ended = false;
   const end = () => {
+    if (ended) return;
+    ended = true;
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", end);
     window.removeEventListener("pointercancel", end);
@@ -120,6 +132,8 @@ function attachGesture(
     target?.removeEventListener("lostpointercapture", end);
     if (target?.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId);
     document.body.classList.remove("is-gesturing");
+    // Flush the final placement now; don't leave it in the 600ms debounce gap.
+    void flushState().catch(() => {});
   };
 
   window.addEventListener("pointermove", onMove);

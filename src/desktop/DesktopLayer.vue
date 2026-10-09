@@ -1,11 +1,12 @@
 <script setup lang="ts">
+import StatusNotice from '@/components/StatusNotice.vue';
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { onBeforeUnmount, onMounted, ref } from "vue";
-import { requestOpenSearch } from "@/lib/tauri";
 import Button from "@/ui/Button.vue";
 import { itemDrag, type DragAction } from "@/composables/useItemDrag";
-import { grantDesktopInput, releaseDesktopInput, showManager } from "@/lib/tauri";
+import { grantDesktopInput, releaseDesktopInput } from "@/lib/tauri";
+import DesktopSearch from './DesktopSearch.vue';
 import ConfirmDialog from "./ConfirmDialog.vue";
 import SurfaceSettings from "./SurfaceSettings.vue";
 import LauncherPanel from "./LauncherPanel.vue";
@@ -211,12 +212,7 @@ onBeforeUnmount(() => {
       <span><small>{{ externalHint.text }}</small></span>
     </div>
     <template v-if="store.ready">
-      <nav class="desktop-actions nestra-hit" aria-label="桌面整理操作">
-        <span class="desktop-actions-brand">Nestra</span>
-        <Button label="新建收纳区" size="small" variant="text" :loading="creatingZone" @click="createZone" />
-        <Button label="搜索" size="small" variant="text" title="Ctrl+Alt+F" @click="requestOpenSearch()" />
-        <Button label="管理" size="small" variant="text" title="Ctrl+Alt+G" @click="showManager()" />
-      </nav>
+      <DesktopSearch />
       <OrganizerPanel
         v-for="panel in visibleDesktopPanels.filter((p) => p.groupId !== 'launcher')"
         :key="panel.key"
@@ -241,9 +237,7 @@ onBeforeUnmount(() => {
     </template>
 
     <Transition name="fade">
-      <div v-if="store.statusMessage" class="status-toast nestra-hit">
-        {{ store.statusMessage }}
-      </div>
+      <StatusNotice v-if="!store.searchOpen||!store.statusAction" desktop />
     </Transition>
 
     <Transition name="fade">

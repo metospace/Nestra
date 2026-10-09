@@ -18,6 +18,13 @@ pub fn icon_cache_dir<R: tauri::Runtime, M: Manager<R>>(manager: &M) -> Option<P
 
 /// `<app-local-data>/state.json`, mirroring the WPF version's storage model.
 pub fn state_file<R: tauri::Runtime, M: Manager<R>>(manager: &M) -> Option<PathBuf> {
+    // Native UI checks run beside the user's instance without sharing its state.
+    #[cfg(feature = "ui-test")]
+    {
+        let _ = manager;
+        return Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../releases/native-ui-test/state.json"));
+    }
+    #[cfg(not(feature = "ui-test"))]
     Some(
         manager
             .path()

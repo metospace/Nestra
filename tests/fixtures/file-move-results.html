@@ -1,0 +1,30 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nestra · 整理失败与重试验收</title></head><body data-window="manager"><div id="app"></div><script type="module">
+// Only synthetic, in-memory files; native commands are never called.
+let disk=null,occupied=true;const calls=[];
+const files=['项目计划.docx','设计方案.pdf','会议记录.txt'].map(name=>({id:`file:C:\\fixture\\Desktop\\${name}`,path:`C:\\fixture\\Desktop\\${name}`,name,kind:'file',launchKind:'filesystem',canManage:true,zone:null,isHidden:false,iconPath:null}));
+window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'manager'},currentWebview:{label:'manager'}},invoke:async(command,args={})=>{
+ if(command==='load_state')return structuredClone(disk);
+ if(command==='save_state'){disk=structuredClone(args.state);return;}
+ if(command==='scan_desktop')return structuredClone(files);
+ if(command==='resolve_icon_pairs')return {};
+ if(command==='move_to_zone'){
+  const file=files.find(file=>file.path===args.path);if(!file)throw Error('示例源文件不存在');calls.push(file.name);
+  if(occupied&&file.name!=='项目计划.docx')throw Error(file.name==='设计方案.pdf'?'示例：文件正在使用，请关闭占用程序后重试':'示例：目录暂不可写，请检查目标目录');
+  file.path=`C:\\fixture\\Desktop\\.nestra\\${args.zoneDir}\\${file.name}`;file.id=`file:${file.path}`;file.zone=args.zoneDir;return file.path;
+ }
+ if(command==='set_hit_rects'||command==='set_mapping_watch_paths'||command.startsWith('plugin:event|'))return;
+ throw Error(`Fixture blocked IPC: ${command}`);
+}};
+const {createApp,h,computed,ref}=await import('vue');const {createRouter,createWebHashHistory}=await import('vue-router');
+const {default:ui}=await import('@nuxt/ui/vue-plugin');await import('/src/style.css');await import('/src/product.css');
+const {default:FileMoveResults}=await import('/src/components/FileMoveResults.vue');
+const {store,batchMoveItems}=await import('/src/stores/state.ts');const {openMoveResults,fileMoves}=await import('/src/composables/fileMoveReports.ts');
+store.customGroups=[{id:'work',name:'工作资料',dirName:'工作资料',sourceKind:'zone'}];store.entries=structuredClone(files);store.ready=true;
+createApp({setup(){const released=ref(false),completed=ref(false);const state=computed(()=>fileMoves.reports.map(report=>report.items.map(item=>`${item.name}:${item.state}`).join('；')).join('\n'));
+return()=>h('main',{style:'max-width:900px;margin:50px auto;padding:30px'},[
+ h('h1','整理失败与重试 · 示例数据'),h('p','全部文件与移动都在内存中模拟。两项首次失败，解除示例占用后可重试。'),
+ h('button',{disabled:completed.value,onClick:async()=>{completed.value=true;await batchMoveItems(files.map(file=>file.id),'work')}},'开始示例批量移动'),
+ h('button',{onClick:()=>{occupied=false;released.value=true}},released.value?'示例占用已解除':'解除示例文件占用'),
+ h('button',{onClick:openMoveResults},'重新查看整理结果'),h('p',state.value),h('output',{'aria-label':'移动调用记录'},calls.join('、')),h(FileMoveResults)
+]);}}).use(createRouter({history:createWebHashHistory(),routes:[{path:'/:pathMatch(.*)*',component:{render:()=>null}}]})).use(ui).mount('#app');
+</script><style>body{background:#eff1f4}main>button{margin:16px 12px 16px 0;padding:10px 16px;border:1px solid #c6cbd2;border-radius:8px;background:white}</style></body></html>

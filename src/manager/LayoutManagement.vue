@@ -7,7 +7,7 @@ import { arrangePanels, layoutFor, locateSurface, refreshDisplays, resetLayouts,
 const surfaces=computed(()=>[...store.panels.filter(p=>!store.tabGroups.some(t=>t.groupIds.includes(p.groupId))).map(p=>({key:p.key,title:p.title})),...store.widgets.map(w=>({key:`widget:${w.id}`,title:w.title}))].filter(s=>layoutFor(s.key)));
 const displays=computed(()=>store.displays.map(d=>({label:`${d.name}${d.isPrimary?' · 主屏幕':''}`,value:d.id})));
 function update(key:string,patch:object){const layout=layoutFor(key);if(layout){Object.assign(layout,patch);scheduleSave();scheduleHitRectSync()}}
-function move(key:string,id:string){const display=store.displays.find(d=>d.id===id),layout=layoutFor(key);if(!display||!layout)return;delete layout.displacedFrom;Object.assign(layout,{monitorId:id,x:display.x+24,y:display.y+76,width:Math.min(layout.width,display.width-48),height:Math.min(layout.height,display.height-100)});scheduleSave();scheduleHitRectSync()}
+function move(key:string,id:string){const display=store.displays.find(d=>d.id===id),layout=layoutFor(key);if(!display||!layout)return;delete layout.displacedFrom;Object.assign(layout,{monitorId:id,monitorBounds:{x:display.x,y:display.y},x:display.x+24,y:display.y+76,width:Math.min(layout.width,display.width-48),height:Math.min(layout.height,display.height-100)});scheduleSave();scheduleHitRectSync()}
 </script>
 <template>
 <div class="page-heading"><div><h1>布局与显示器</h1><p>管理面板位置与锁定，找回隐藏或屏幕外的内容。</p></div><UButton variant="outline" icon="i-lucide-refresh-cw" @click="refreshDisplays">刷新显示器</UButton></div>

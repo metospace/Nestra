@@ -13,8 +13,10 @@ import {
   recycleDesktopItem,
   renameDesktopItem,
   rescan,
+  showStatus,
   store,
   selectItem,
+  selectPanelItems,
   toggleLauncher,
   unfoldItem,
 } from "@/stores/state";
@@ -33,6 +35,8 @@ const props = defineProps<{
 // 图标走内存缓存（两段式加载）；未命中时渲染字形徽章。
 const image = computed(() => cachedIconUrl(props.entry.path));
 const managed = computed(() => canManageEntry(props.entry));
+const singleClickLaunch = computed(() => Boolean(props.panelKey) && props.entry.isApplication);
+const opening = ref(false);
 
 /* 右键菜单 ------------------------------------------------------------- */
 
@@ -87,14 +91,15 @@ function openFallbackMenu(event: MouseEvent): void {
 }
 
 async function safeOpen(): Promise<void> {
+  if (opening.value) return;
+  opening.value = true;
   try {
     await launchEntry(props.entry);
   } catch (error) {
-    store.statusMessage = `无法打开：${props.entry.name}`;
-    window.setTimeout(() => {
-      if (store.statusMessage.startsWith("无法打开")) store.statusMessage = "";
-    }, 3000);
+    showStatus(`无法打开：${props.entry.name}`);
     void error;
+  } finally {
+    opening.value = false;
   }
 }
 
@@ -106,7 +111,7 @@ function menuOpen(): void {
 function menuReveal(): void {
   menu.value = null;
   void revealEntry(props.entry.path).catch(() => {
-    store.statusMessage = "无法在资源管理器中显示";
+    showStatus("无法在资源管理器中显示");
   });
 }
 
@@ -145,10 +150,17 @@ function menuDelete(): void {
 }
 
 function onSelect(event: MouseEvent): void {
+  if (singleClickLaunch.value && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+    selectPanelItems(props.panelKey ?? '', []);
+    // The second click and dblclick must not launch an application twice.
+    if (event.detail <= 1) void safeOpen();
+    return;
+  }
   selectItem(props.entry.id,props.panelKey??'',props.selectionOrder??[props.entry.id],event.ctrlKey||event.metaKey,event.shiftKey);
 }
 
-function onOpen(): void {
+function onOpen(event: MouseEvent): void {
+  if (singleClickLaunch.value || event.ctrlKey || event.metaKey || event.shiftKey) return;
   void safeOpen();
 }
 

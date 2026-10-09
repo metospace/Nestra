@@ -5,7 +5,7 @@
 use std::sync::{RwLock, atomic::{AtomicBool, AtomicIsize, Ordering}};
 use windows::core::{w, BOOL};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{CreateRectRgn, CombineRgn, DeleteObject, SetWindowRgn, HRGN, RGN_OR};
+use windows::Win32::Graphics::Gdi::{CreateRectRgn, CombineRgn, DeleteObject, EqualRgn, GetWindowRgn, RedrawWindow, SetWindowRgn, HRGN, RGN_OR, RGN_DIFF, RDW_INVALIDATE, RDW_NOERASE, RDW_ALLCHILDREN};
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -31,8 +31,34 @@ pub fn virtual_desktop_bounds() -> (i32, i32, u32, u32) {
     }
 }
 
-pub fn set_hit_rects(rects: Vec<RECT>) {
-    if let Ok(mut current) = HIT_RECTS.write() { *current = rects; }
+/// Unlike DISPLAY1/2, the monitor interface survives display enumeration order
+/// changes. Keep the GDI name only as a migration alias for existing layouts.
+pub fn monitor_identity(name: &str) -> String {
+    use windows::core::{HSTRING, PCWSTR};
+    use windows::Win32::Graphics::Gdi::{EnumDisplayDevicesW, DISPLAY_DEVICEW, DISPLAY_DEVICE_ACTIVE};
+    let name_wide = HSTRING::from(name);
+    let mut index = 0;
+    loop {
+        let mut device = DISPLAY_DEVICEW { cb: std::mem::size_of::<DISPLAY_DEVICEW>() as u32, ..Default::default() };
+        if !unsafe { EnumDisplayDevicesW(PCWSTR(name_wide.as_ptr()), index, &mut device, 1) }.as_bool() { break; }
+        if (device.StateFlags & DISPLAY_DEVICE_ACTIVE).0 != 0 {
+            let length = device.DeviceID.iter().position(|c| *c == 0).unwrap_or(device.DeviceID.len());
+            let id = String::from_utf16_lossy(&device.DeviceID[..length]);
+            if !id.is_empty() { return format!("monitor:{}", id.to_lowercase()); }
+        }
+        index += 1;
+    }
+    name.into()
+}
+
+pub fn set_hit_rects(mut rects: Vec<RECT>) {
+    rects.retain(|r| r.right > r.left && r.bottom > r.top);
+    rects.sort_by_key(|r| (r.left, r.top, r.right, r.bottom));
+    rects.dedup();
+    if let Ok(mut current) = HIT_RECTS.write() {
+        if *current == rects { return; }
+        *current = rects;
+    }
     let hwnd = HWND(LAYER_HWND.load(Ordering::SeqCst) as _);
     if !hwnd.0.is_null() {
         unsafe { let _ = PostMessageW(Some(hwnd), REGION_CHANGED, WPARAM(0), LPARAM(0)); }
@@ -59,11 +85,29 @@ unsafe fn build_region(rects: &[RECT]) -> Option<HRGN> {
 unsafe fn apply_surface_region(hwnd: HWND) {
     let rects = HIT_RECTS.read().map(|r| r.clone()).unwrap_or_default();
     if let Some(region) = build_region(&rects) {
+        let previous = CreateRectRgn(0, 0, 0, 0);
+        let has_previous = !previous.0.is_null() && GetWindowRgn(hwnd, previous).0 != 0;
+        if has_previous && EqualRgn(region, previous).as_bool() {
+            let _ = DeleteObject(previous.into());
+            let _ = DeleteObject(region.into());
+            return;
+        }
+        let exposed = CreateRectRgn(0, 0, 0, 0);
+        if !exposed.0.is_null() {
+            let _ = CombineRgn(Some(exposed), Some(region), if has_previous { Some(previous) } else { Some(region) },
+                if has_previous { RGN_DIFF } else { RGN_OR });
+        }
         // On success Windows owns the region. An empty region leaves no hidden
         // full-screen input target during startup or when all surfaces are hidden.
-        if SetWindowRgn(hwnd, Some(region), true) == 0 {
+        // Preserve existing WebView pixels. Only newly exposed popup/surface
+        // area needs invalidation; erasing the whole layer flashes every card.
+        if SetWindowRgn(hwnd, Some(region), false) == 0 {
             let _ = DeleteObject(region.into());
+        } else if !exposed.0.is_null() {
+            let _ = RedrawWindow(Some(hwnd), None, Some(exposed), RDW_INVALIDATE | RDW_NOERASE | RDW_ALLCHILDREN);
         }
+        if !previous.0.is_null() { let _ = DeleteObject(previous.into()); }
+        if !exposed.0.is_null() { let _ = DeleteObject(exposed.into()); }
     }
 }
 
@@ -125,10 +169,14 @@ pub fn pin_desktop_layer(value: isize) {
         #[cfg(feature = "ui-test")]
         let style = (style | WS_EX_APPWINDOW.0) & !WS_EX_TOOLWINDOW.0;
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style as isize);
-        apply_surface_region(hwnd);
         #[allow(function_casts_as_integer)]
         let previous = SetWindowLongPtrW(hwnd, GWL_WNDPROC, layer_window_proc as usize as isize);
         ORIGINAL_PROC.store(previous, Ordering::SeqCst);
+        let style = frameless_style(GetWindowLongPtrW(hwnd, GWL_STYLE) as u32);
+        SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
+        let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
+        apply_surface_region(hwnd);
         SetTimer(Some(hwnd), RESTORE_TIMER_ID, 250, None);
     }
     anchor_above_desktop(hwnd);
@@ -243,7 +291,8 @@ fn release_keyboard_focus_on_window_thread() {
             && IsWindow(Some(previous)).as_bool()
         {
             let _ = SetFocus(Some(previous));
-            let _ = SetForegroundWindow(previous);
+            // It is already foreground. Activating it again triggers needless
+            // nonclient painting when returning borrowed WebView keyboard focus.
         }
     }
 
@@ -294,8 +343,16 @@ fn uncloak(hwnd: HWND) {
 }
 
 
-unsafe extern "system" fn layer_window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+fn frameless_style(style: u32) -> u32 {
+    (style | WS_POPUP.0) & !(WS_CAPTION.0 | WS_THICKFRAME.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0)
+}
+
+unsafe extern "system" fn layer_window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, mut lparam: LPARAM) -> LRESULT {
     match msg {
+        WM_NCCALCSIZE | WM_NCPAINT => return LRESULT(0),
+        // Tao still receives activation changes, but DefWindowProc must never
+        // paint a Windows caption over the shaped, frameless desktop WebView.
+        WM_NCACTIVATE => lparam = LPARAM(-1),
         REGION_CHANGED => { apply_surface_region(hwnd); return LRESULT(0); }
         RELEASE_INPUT => { release_keyboard_focus_on_window_thread(); return LRESULT(0); }
         WM_MOUSEACTIVATE => return LRESULT(MA_NOACTIVATE as isize),
@@ -356,6 +413,32 @@ unsafe extern "system" fn layer_window_proc(hwnd: HWND, msg: u32, wparam: WPARAM
 mod tests {
     use super::*;
     use windows::Win32::Graphics::Gdi::PtInRegion;
+    #[test]
+    fn frameless_desktop_preserves_visibility_and_webview_clipping() {
+        let style = frameless_style((WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS).0);
+        assert_eq!(style & (WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX).0, 0);
+        assert_eq!(style & (WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_POPUP).0,
+            (WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_POPUP).0);
+        unsafe {
+            // Both forms are sent by Windows: activation/frame recalculation
+            // must never let the default procedure reserve a caption strip.
+            for parameter in [0, 1] {
+                assert_eq!(layer_window_proc(HWND::default(), WM_NCCALCSIZE, WPARAM(parameter), LPARAM(0)).0, 0);
+            }
+        }
+    }
+    #[test]
+    fn equivalent_unions_do_not_need_a_second_native_region_update() {
+        unsafe {
+            let a = RECT { left: 0, top: 0, right: 800, bottom: 600 };
+            let b = RECT { left: 20, top: 20, right: 200, bottom: 200 };
+            let first = build_region(&[a]).unwrap();
+            let nested = build_region(&[b, a, b]).unwrap();
+            assert!(EqualRgn(first, nested).as_bool());
+            let _ = DeleteObject(first.into());
+            let _ = DeleteObject(nested.into());
+        }
+    }
     #[test]
     fn native_region_covers_surfaces_but_not_desktop_between_them() {
         unsafe {

@@ -9,6 +9,7 @@ const {default:ui}=await import('@nuxt/ui/vue-plugin');
 const {addCollection}=await import('@iconify/vue');
 const {icons}=await import('@iconify-json/lucide');addCollection(icons);
 await import('/src/style.css');
+await import('/src/product.css');
 const {default:OrganizerPanel}=await import('/src/desktop/OrganizerPanel.vue');
 const {default:SurfaceSettings}=await import('/src/desktop/SurfaceSettings.vue');
 const {store,setAppearance,useGlobalAppearanceForAll}=await import('/src/stores/state.ts');

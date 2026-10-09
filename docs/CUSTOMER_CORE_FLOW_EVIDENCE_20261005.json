@@ -1,0 +1,42 @@
+{
+  "date": "2026-10-05",
+  "kind": "isolated_code_behavior_checks",
+  "ui_test_completed": false,
+  "screenshots": [],
+  "browser_blocker": "Saved user permission setting blocks http://127.0.0.1:1420 after explicit renewed authorization.",
+  "checks": [
+    {
+      "case": "click_view_desktop_on_locked_panel",
+      "source": "src/stores/state.ts:1830",
+      "before": {"x": 580, "y": 320, "locked": true},
+      "after": {"x": 28, "y": 76, "width": 336, "height": 432, "visible": true, "locked": true, "monitorId": "main", "zIndex": 20}
+    },
+    {
+      "case": "first_pin_hidden_launcher",
+      "source": "src/stores/state.ts:1845",
+      "ids": ["file:C:/test/report.txt"],
+      "visible": false
+    },
+    {
+      "case": "fresh_workspace_welcome_branch",
+      "source": "src/manager/WorkspaceOverview.vue:12",
+      "surfaceCount": 1,
+      "firstTitle": "快捷启动",
+      "welcomeShown": false
+    },
+    {
+      "case": "local_selection_then_index_results",
+      "source": "src/features/SearchPanel.vue:19",
+      "selectedBefore": "报告 B",
+      "selectedAfter": "报告 A",
+      "activeIndex": 0
+    },
+    {
+      "case": "partial_batch_failure",
+      "source": "src/stores/state.ts:147",
+      "statuses": ["收纳失败：文件正在被占用", "移动完成：1 项成功，1 项未移动"],
+      "lastVisibleStatus": "移动完成：1 项成功，1 项未移动",
+      "failedSelection": {"panel": "zone:work", "ids": ["blocked"]}
+    }
+  ]
+}

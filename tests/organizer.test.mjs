@@ -41,6 +41,25 @@ test("renaming a mapping changes only the view title",async()=>{
   assert.equal(t.store.customGroups[0].mappedPath,"D:/Pictures"); assert.deepEqual(t.actions,[]);
 });
 
+test("zone deletion returns files before removing layout and group state",async()=>{
+ const t=mappingContext();delete t.store.customGroups[0].mappedPath;
+ t.store.panelLayouts['zone:map']={visible:true};
+ let finish;const returned=new Promise(resolve=>finish=resolve);
+ t.context.dissolveZone=async()=>{assert.equal(t.store.customGroups.length,1);await returned;};
+ const deletion=t.context.removeCustomGroup('map');await Promise.resolve();
+ assert.equal(t.store.customGroups.length,1);assert.ok(t.store.panelLayouts['zone:map']);
+ finish();await deletion;assert.equal(t.store.customGroups.length,0);assert.equal(t.store.panelLayouts['zone:map'],undefined);
+});
+test("failed or cancelled zone deletion retains the group and its layout",async()=>{
+ for(const cancelled of [true,false]){
+  const t=mappingContext();delete t.store.customGroups[0].mappedPath;t.store.panelLayouts['zone:map']={visible:true};
+  t.context.confirmDialog=async()=>!cancelled;
+  t.context.dissolveZone=async()=>{t.actions.push('dissolve');throw Error('locked file');};
+  await t.context.removeCustomGroup('map');assert.equal(t.store.customGroups.length,1);assert.ok(t.store.panelLayouts['zone:map']);
+  assert.equal(t.actions.length,cancelled?0:1);
+ }
+});
+
 const scanFn = storeAst.statements.find(s => ts.isFunctionDeclaration(s) && s.name?.text === "scanAllEntries");
 const scanCode = ts.transpile(scanFn.getText(storeAst), {target:ts.ScriptTarget.ES2022});
 test("launcher reference is restored without its previous folder mapping", async () => {

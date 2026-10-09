@@ -11,7 +11,11 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    FileMoveResults: typeof import('./src/components/FileMoveResults.vue')['default']
+    NestraLogo: typeof import('./src/components/NestraLogo.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    StatusNotice: typeof import('./src/components/StatusNotice.vue')['default']
+    TodoList: typeof import('./src/components/TodoList.vue')['default']
   }
 }

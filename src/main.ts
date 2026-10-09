@@ -6,6 +6,7 @@ import { icons } from "@iconify-json/lucide";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import App from "./App.vue";
 import "./style.css";
+import "./product.css";
 
 document.body.dataset.window = getCurrentWebviewWindow().label;
 

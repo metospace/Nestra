@@ -6,11 +6,14 @@
 
 import { computed, reactive, watch } from "vue";
 import { createRefreshQueue } from "@/lib/refreshQueue";
+import { discardTodoDraft } from "@/composables/useTodoDraft";
+import { fileMoves, trackFileMoves, type MoveTask } from '@/composables/fileMoveReports';
+import { createHitRegionSync, normalizeHitRects } from "@/lib/hitRegions";
 import { inFolder, matchesFilter } from "@/lib/organizer";
-import { recoverSurface } from "@/lib/layout";
+import { containSurface, createDisplayRecoveryGate, recoverSurface } from "@/lib/layout";
 import { rankSearch, runSearch } from "@/lib/search";
 import { sourceFor, referenceFromId } from "@/domain/sources";
-import { migrateConfiguration, prepareRestore } from "@/domain/configuration";
+import { FROST_APPEARANCE, migrateConfiguration, prepareRestore } from "@/domain/configuration";
 import type { SearchScope, SearchResult } from "@/lib/search";
 import {
   listDisplays,
@@ -64,10 +67,7 @@ import type {
 } from "@/types";
 
 const DEFAULT_APPEARANCE: AppearanceSettings = {
-  surfaceMaterial: "clear",
-  cornerStyle: "standard",
-  borderStyle: "subtle",
-  panelOpacity: 0.95,
+  ...FROST_APPEARANCE,
 };
 
 const PANEL_WIDTH = 336;
@@ -77,6 +77,7 @@ const SCREEN_MARGIN = 18;
 
 /** 快捷启动面板的布局键。 */
 export const LAUNCHER_PANEL_KEY = "system:launcher";
+export const DESKTOP_SEARCH_KEY = "system:search";
 
 function zonePanelKey(groupId: string): string {
   return `zone:${groupId}`;
@@ -115,6 +116,7 @@ export const store = reactive({
     resolve: (ok: boolean) => void;
   } | null,
   statusMessage: "",
+  statusAction: null as "show-launcher" | null,
   selectedItemId: "",
   selectedItemIds: [] as string[],
   selectionPanel: "",
@@ -143,10 +145,38 @@ export function selectItem(id: string, panelKey: string, order: string[], ctrl: 
   if (!shift) store.selectionAnchor=id;
 }
 export async function batchMoveItems(ids: string[], target: string): Promise<void> {
-  let succeeded=0;const failed:string[]=[];
-  for (const id of [...ids]) {if (await moveItem(id,target)) succeeded++;else failed.push(id);}
-  showStatus(`移动完成：${succeeded} 项成功，${ids.length-succeeded} 项未移动`);
-  selectPanelItems(store.selectionPanel,failed);
+  if (fileMoves.busy) { showStatus('正在整理文件，请等待本次操作完成'); return; }
+  const group = store.customGroups.find(group => group.id === target);
+  const destination = group ? JSON.stringify([group.dirName, group.mappedPath, sourceFor(group).writable]) : '';
+  const selectionIds = [...new Set(ids)];
+  const tasks = selectionIds.map(id => {
+    const entry = store.entries.find(item => item.id === id);
+    const path = entry?.path ?? id;
+    return { name: entry?.name ?? id, path, run: async () => {
+      const current = store.customGroups.find(group => group.id === target);
+      if (target !== 'launcher' && (!current || JSON.stringify([current.dirName, current.mappedPath, sourceFor(current).writable]) !== destination)) throw new Error('目标目录已改变，请重新选择目标并发起移动');
+      if (store.entries.find(item => item.id === id)?.path !== path) throw new Error('源文件已改变或不在当前列表中，请刷新后重新选择');
+      return moveItemOrThrow(id, target);
+    } };
+  });
+  const report = await trackFileMoves(target === 'launcher' ? '快捷启动（引用）' : group?.name ?? '已失效的目标', tasks, async () => { await rescan(); scheduleSave(); });
+  if (report) {
+    selectPanelItems(store.selectionPanel, selectionIds.filter((_, index) => report.items[index]?.state === 'failed'));
+    showStatus(`整理完成：${report.items.filter(item=>item.state==='success').length} 项成功，${report.items.filter(item=>item.state==='failed').length} 项失败`);
+  }
+}
+
+export async function batchReturnItems(ids: string[]): Promise<void> {
+  if (fileMoves.busy) { showStatus('正在整理文件，请等待本次操作完成'); return; }
+  const tasks = [...new Set(ids)].map(id => {
+    const entry = store.entries.find(item => item.id === id);
+    const path = entry?.path ?? id;
+    return { name: entry?.name ?? id, path, run: async () => {
+      if (store.entries.find(item => item.id === id)?.path !== path) throw new Error('源文件已改变，请刷新后重新选择');
+      return returnItemOrThrow(id);
+    } };
+  });
+  await trackFileMoves('个人桌面', tasks, async () => { await rescan(); scheduleSave(); });
 }
 
 /** 图标内存缓存：entry.path → asset URL。快照先无图标渲染，这里异步补齐
@@ -393,6 +423,7 @@ export async function initialize(): Promise<void> {
   ensurePanels();
   ensureLayouts();
   ensureLauncherLayout();
+  const launcherVisibilityChanged = hideLegacyLauncher();
   applyAppearanceToCss();
   try {
     await bindIpc();
@@ -400,11 +431,17 @@ export async function initialize(): Promise<void> {
     /* IPC 绑定失败也保持可用 */
   }
   store.ready = true;
+  if (launcherVisibilityChanged) scheduleSave();
   void import("@/lib/tauri").then(async api => {
     store.applications = await api.scanApplications();
     await api.setClipboardEnabled(store.clipboardEnabled);
   }).catch(() => showStatus("应用目录暂时不可用，可在搜索页重新刷新"));
   recoverDesktopLayouts();
+  if (getCurrentWebviewWindow().label === "desktop") {
+    // Enumeration/monitor numbering may settle after initialization or wake-up.
+    // A periodic refresh also restores displaced surfaces when a monitor returns.
+    window.setInterval(() => { void refreshDisplays(); }, 2000);
+  }
 
   // 面板此时才真的挂载进 DOM，且桌面层窗口刚被 Rust resize 到位。
   // 用几个递增的延迟反复校准命中矩形，覆盖冷启动期的 reflow/窗口大小竞态。
@@ -520,7 +557,21 @@ async function applyRemoteState(): Promise<void> {
 }
 
 /** 快捷启动面板首次布局：贴着屏幕右下角。 */
+function hideLegacyLauncher(): boolean {
+  const layout = store.panelLayouts[LAUNCHER_PANEL_KEY];
+  if (!layout || layout.launcherVisibilityMigrated) return false;
+  layout.visible = false;
+  layout.launcherVisibilityMigrated = true;
+  return true;
+}
+
 function ensureLauncherLayout(): void {
+  if (!store.panelLayouts[DESKTOP_SEARCH_KEY]) {
+    const display = store.displays.find(d => d.isPrimary) ?? store.displays[0];
+    store.panelLayouts[DESKTOP_SEARCH_KEY] = { x: (display?.x ?? 0) + Math.max(0, ((display?.width ?? window.innerWidth) - 280) / 2),
+      y: (display?.y ?? 0) + 14, width: 280, height: 46, zIndex: 8, visible: true };
+    if (display) { containSurface(store.panelLayouts[DESKTOP_SEARCH_KEY]!, display); store.panelLayouts[DESKTOP_SEARCH_KEY]!.monitorId = display.id; }
+  }
   if (store.panelLayouts[LAUNCHER_PANEL_KEY]) return;
 
   store.panelLayouts[LAUNCHER_PANEL_KEY] = {
@@ -529,7 +580,8 @@ function ensureLauncherLayout(): void {
     width: 336,
     height: 420,
     zIndex: 5,
-    visible: true,
+    visible: false,
+    launcherVisibilityMigrated: true,
     viewMode: "grid",
     columns: 4,
     density: "comfortable",
@@ -545,7 +597,7 @@ async function restoreState(): Promise<void> {
     }
     applyPersisted(migrateConfiguration(persisted));
     lastSynced = persisted;
-    if ((persisted.schemaVersion ?? 1) < 2) scheduleSave();
+    if ((persisted.schemaVersion ?? 1) < 2 || !persisted.appearance?.styleVersion) scheduleSave();
   } catch (error) {
     store.persistenceBlocked = true;
     showStatus(`配置未载入，已停止写入以保留原数据：${error}`);
@@ -659,17 +711,23 @@ async function syncMappingWatches(): Promise<void> {
   try { await setMappingWatchPaths(paths); } catch { /* non-Tauri preview */ }
 }
 
+const displayRecoveryReady = createDisplayRecoveryGate();
+let canRecoverDisplays = false;
+let displayRefreshRunning = false;
 export async function refreshDisplays(): Promise<void> {
-  try { store.displays = await listDisplays(); } catch { store.displays = []; }
-  for (const layout of [...Object.values(store.panelLayouts), ...store.widgets.map(w => w.layout)]) {
-    const legacy = store.displays.find(display => layout.monitorId?.startsWith(`${display.id}:`));
-    if (legacy) layout.monitorId = legacy.id;
-  }
+  if (displayRefreshRunning) return;
+  displayRefreshRunning = true;
+  try {
+    const displays = await listDisplays();
+    canRecoverDisplays = displayRecoveryReady(displays, Date.now());
+    if (displays.length) store.displays = displays;
+  } catch { canRecoverDisplays = displayRecoveryReady([], Date.now()); }
+  finally { displayRefreshRunning = false; }
   if (store.ready) recoverDesktopLayouts();
 }
 
 function recoverDesktopLayouts(): void {
-  if (getCurrentWebviewWindow().label !== "desktop" || desktopGestureActive()) return;
+  if (!canRecoverDisplays || getCurrentWebviewWindow().label !== "desktop" || desktopGestureActive()) return;
   let changed = false;
   for (const layout of [...Object.values(store.panelLayouts), ...store.widgets.map(widget => widget.layout)]) {
     if (recoverSurface(layout, store.displays)) changed = true;
@@ -827,6 +885,12 @@ function ensureLayouts(): void {
       columns: 4,
       density: "comfortable",
     };
+    const display = store.displays.find(d => d.isPrimary) ?? store.displays[0];
+    if (display) {
+      containSurface(store.panelLayouts[panel.key]!, display);
+      store.panelLayouts[panel.key]!.monitorId = display.id;
+      store.panelLayouts[panel.key]!.monitorBounds = { x: display.x, y: display.y };
+    }
   });
 
   // Remote state application also calls this helper. Saving when nothing was
@@ -854,6 +918,7 @@ export function applyAppearanceToCss(): void {
 /* ------------------------------------------------------------------ */
 
 let hitRectTimer: number | undefined;
+const syncHitRegion = createHitRegionSync(setHitRects);
 
 /** 把屏幕上真实可见的悬浮表面矩形（换算成物理像素）推给 Rust 命中测试。
  * 优先读实际渲染出的 DOM（getBoundingClientRect，永远反映最终位置），
@@ -868,14 +933,14 @@ async function pushHitRects(): Promise<void> {
   // Only while an internal tile is actively dragged, receive drops between
   // panels too. Cleanup restores the shaped window on up/cancel/Escape/blur.
   if (document.body.classList.contains("is-item-dragging")) {
-    await setHitRects([{ x: 0, y: 0, width: Math.round(window.innerWidth * dpr), height: Math.round(window.innerHeight * dpr) }]);
+    await syncHitRegion([{ x: 0, y: 0, width: Math.round(window.innerWidth * dpr), height: Math.round(window.innerHeight * dpr) }]);
     return;
   }
 
   // 1) 权威来源：正在屏幕上绘制的悬浮表面（面板 + 快捷启动 + 小组件）。
   document.querySelectorAll<HTMLElement>(".nestra-panel, .nestra-hit").forEach((el) => {
     const r = el.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0) {
+    if (r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden') {
       rects.push({
         x: Math.round(r.left * dpr),
         y: Math.round(r.top * dpr),
@@ -912,7 +977,7 @@ async function pushHitRects(): Promise<void> {
   }
 
   try {
-    await setHitRects(rects);
+    await syncHitRegion(normalizeHitRects(rects, Math.round(window.innerWidth * dpr), Math.round(window.innerHeight * dpr)));
   } catch {
     // 命中同步失败只影响穿透体验，不提示。
   }
@@ -1020,7 +1085,7 @@ let persistChain: Promise<void> = Promise.resolve();
 
 /** 三方合并（base/local/remote），防止两个窗口的整文档快照互相覆盖。
  * 集合按 key 合并：本地或远端单边新增的保留、单边删除的尊重、两边都改的
- * 以本地为准；标量字段本地有改动用本地、否则跟远端。 */
+ * 以远端为准；标量字段本地有改动用本地、否则跟远端。 */
 function mergePersisted(
   base: PersistedState | null,
   local: PersistedState,
@@ -1113,6 +1178,18 @@ function mergePersisted(
     return out;
   };
 
+  // Desktop and manager can change different tasks in the same widget. Merge
+  // tasks by their own identities; unrelated widget edits must not erase them.
+  for (const id of Object.keys(mergedWidgets)) {
+    const l = widgetsL[id], r = widgetsR[id], b = widgetsB[id];
+    if (l?.kind === 'todo' && r?.kind === 'todo') {
+      mergedWidgets[id] = {
+        ...mergedWidgets[id]!,
+        todos: orderBy(mergeMap(byId(b?.todos), byId(l.todos), byId(r.todos)), l.todos, r.todos),
+      };
+    }
+  }
+
   return {
     schemaVersion: 2,
     launcherReferences: mergeMap(base?.launcherReferences, local.launcherReferences, remote.launcherReferences),
@@ -1133,13 +1210,24 @@ function mergePersisted(
 }
 
 let statusTimer: number | undefined;
-export function showStatus(message: string): void {
+export function showStatus(message: string, action: "show-launcher" | null = null): void {
   store.statusMessage = message;
+  store.statusAction = action;
   if (statusTimer !== undefined) window.clearTimeout(statusTimer);
+  statusTimer = undefined;
+  // Keep an actionable result available until used, dismissed or replaced.
+  if (action) return;
   statusTimer = window.setTimeout(() => {
     store.statusMessage = "";
     statusTimer = undefined;
   }, 3000);
+}
+
+export function dismissStatus(): void {
+  if (statusTimer !== undefined) window.clearTimeout(statusTimer);
+  statusTimer = undefined;
+  store.statusMessage = "";
+  store.statusAction = null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1169,8 +1257,18 @@ export function bringToFront(key: string): void {
 /** 把项目收进收纳区 = 文件真实移动到 .nestra\<dirName>。
  * 返回移动后的新条目 id；失败返回 null。 */
 export async function moveItem(itemId: string, targetGroupId: string): Promise<string | null> {
+  try {
+    const id = await moveItemOrThrow(itemId, targetGroupId);
+    if (targetGroupId === 'launcher') return id;
+    try { await rescan(); } catch (error) { showStatus(`移动已完成，但列表刷新失败：${error}`); return id; }
+    showStatus('文件已移动到目标目录');
+    return id;
+  } catch (error) { showStatus(`收纳失败：${error}`); return null; }
+}
+
+async function moveItemOrThrow(itemId: string, targetGroupId: string): Promise<string> {
   const entry = store.entries.find((item) => item.id === itemId);
-  if (!entry) return null;
+  if (!entry) throw new Error('源文件不在当前列表中，请刷新后重新选择');
 
   if (targetGroupId === "launcher") {
     // 快捷启动是纯引用：不移动文件。
@@ -1179,30 +1277,22 @@ export async function moveItem(itemId: string, targetGroupId: string): Promise<s
   }
 
   const group = store.customGroups.find((candidate) => candidate.id === targetGroupId);
-  if (group && !sourceFor(group).writable) { showStatus("此视图只浏览，不接收文件"); return null; }
-  if (!group) return null;
+  if (group && !sourceFor(group).writable) throw new Error('此视图只浏览，不接收文件');
+  if (!group) throw new Error('目标目录已不存在');
 
   if ((!entry.canManage && !store.customGroups.some(g => g.mappedPath && inFolder(entry.path, g.mappedPath))) || entry.kind === "shell") {
-    showStatus("这个项目不能收纳");
-    return null;
+    throw new Error('这个项目不能收纳');
   }
   if (entry.zone === group.dirName || (group.mappedPath && inFolder(entry.path, group.mappedPath))) return itemId;
 
-  try {
-    const newId = await performFileChange(async () => {
+  return performFileChange(async () => {
       const newPath = group.mappedPath ? await moveToFolder(entry.path, group.mappedPath) : await moveToZone(entry.path, group.dirName);
       const id = remappedId(entry, newPath);
       migrateItemId(itemId, id);
       clearFolded(id);
+      scheduleSave();
       return id;
     });
-    await rescan();
-    showStatus(`已收进「${group.name}」`);
-    return newId;
-  } catch (error) {
-    showStatus(`收纳失败：${error}`);
-    return null;
-  }
 }
 
 /** 把 itemId 归入 groupId 并排到 beforeId 之前（null = 末尾）。
@@ -1233,25 +1323,26 @@ export async function placeItem(
 
 /** 把收纳区项目放回桌面顶层（文件真实移回，原生图标重新出现）。 */
 export async function moveEntryToDesktop(itemId: string): Promise<void> {
+  try {
+    await returnItemOrThrow(itemId);
+    try { await rescan(); } catch (error) { showStatus(`已放回桌面，但列表刷新失败：${error}`); return; }
+    scheduleSave(); showStatus('文件已放回桌面');
+  } catch (error) { showStatus(`无法放回桌面：${error}`); }
+}
+
+async function returnItemOrThrow(itemId: string): Promise<void> {
   const entry = store.entries.find((item) => item.id === itemId);
-  if (!entry || !entry.zone) return;
+  if (!entry || !entry.zone) throw new Error('项目已不在收纳区，请刷新后重新选择');
   const mapped = store.customGroups.some(g => g.mappedPath && inFolder(entry.path, g.mappedPath));
   if (!entry.canManage && !mapped) {
-    showStatus("这个项目不能移动");
-    return;
+    throw new Error('这个项目不能移动');
   }
 
-  try {
-    await performFileChange(async () => {
+  await performFileChange(async () => {
       const newPath = mapped ? await moveToFolder(entry.path, null) : await moveToDesktopNative(entry.path);
       migrateItemId(entry.id, remappedId(entry, newPath));
+      scheduleSave();
     });
-    await rescan();
-    scheduleSave();
-    showStatus(`「${entry.name}」已放回桌面`);
-  } catch (error) {
-    showStatus(`无法放回桌面：${error}`);
-  }
 }
 
 /** 外部路径拖放：落在收纳区面板上 = 真实移入该区；
@@ -1295,25 +1386,22 @@ export async function dropPaths(paths: string[], groupId: string | null): Promis
   }
 
   if (!sourceFor(group).writable) { showStatus("此视图只浏览，不接收文件；原文件未改变"); return; }
-  let moved = 0;
-  const errors: string[] = [];
-  for (const path of paths) {
+  if (fileMoves.busy) { showStatus('正在整理文件，请等待本次操作完成'); return; }
+  const destination = JSON.stringify([group.dirName, group.mappedPath, sourceFor(group).writable]);
+  const tasks: MoveTask[] = [...new Set(paths)].map(path => {
     const entry = store.entries.find((item) => item.path.toLowerCase() === path.toLowerCase());
-    try {
+    return { name: path.split(/[\\/]/).pop() ?? path, path, run: async () => {
+      const current = store.customGroups.find(item => item.id === groupId);
+      if (!current || JSON.stringify([current.dirName, current.mappedPath, sourceFor(current).writable]) !== destination) throw new Error('目标目录已改变，请重新选择目标并发起移动');
       await performFileChange(async () => {
         const newPath = group.mappedPath ? await moveToFolder(path, group.mappedPath) : await moveToZone(path, group.dirName);
         if (entry) migrateItemId(entry.id, remappedId(entry, newPath));
+        scheduleSave();
       });
-      moved += 1;
-    } catch (error) {
-      errors.push(`${path.split(/[\\/]/).pop()}：${error}`);
-    }
-  }
-  await rescan();
-  scheduleSave();
-  showStatus(errors.length
-    ? `已收纳 ${moved} 项，${errors.length} 项失败：${errors[0]}`
-    : `已收进「${group.name}」（${moved} 项）`);
+    } };
+  });
+  const report = await trackFileMoves(group.name, tasks, async () => { await rescan(); scheduleSave(); });
+  if (report) showStatus(`已收纳 ${report.items.filter(item=>item.state==='success').length} 项，${report.items.filter(item=>item.state==='failed').length} 项失败`);
 }
 
 /** 引用语义：只记 id，不动文件。 */
@@ -1325,7 +1413,8 @@ export function toggleLauncher(entryId: string): void {
     store.launcherIds.push(entryId);
     const entry = store.entries.find(item => item.id === entryId) ?? store.applications.find(item => item.id === entryId);
     if (entry) store.launcherReferences[entryId] = { ...entry, iconPath: null };
-    showStatus("已加入快捷启动，单击图标即可启动");
+    showStatus("已加入快捷启动，单击图标即可启动",
+      store.panelLayouts[LAUNCHER_PANEL_KEY]?.visible === true ? null : "show-launcher");
   }
   scheduleSave();
 }
@@ -1442,7 +1531,10 @@ export function movePanelToDisplay(key: string, displayId: string): void {
   layout.x = Math.round(display.x + Math.max(16, (display.width - layout.width) / 2));
   layout.y = Math.round(display.y + Math.max(16, (display.height - layout.height) / 2));
   layout.monitorId = display.id;
+  layout.monitorBounds = { x: display.x, y: display.y };
   layout.zIndex = nextZ();
+  containSurface(layout, display);
+  delete layout.displacedFrom;
   scheduleSave();
   scheduleHitRectSync();
 }
@@ -1483,6 +1575,7 @@ export function arrangePanels(mode: "grid" | "cascade", displayId?: string): voi
       });
     });
   }
+  for (const panel of panels) { const layout=store.panelLayouts[panel.key]; if(layout){containSurface(layout,display);layout.monitorBounds={x:display.x,y:display.y};delete layout.displacedFrom;} }
   scheduleSave();
   scheduleHitRectSync();
   showStatus(mode === "grid" ? "面板已平铺" : "面板已层叠排列");
@@ -1774,6 +1867,7 @@ export function createWidget(kind: "note" | "todo" | "clipboard" | "clock"): voi
 export async function removeWidget(id: string): Promise<void> {
   if (!(await confirmDialog("删除这个小组件？内容不会再保留。"))) return;
   store.widgets = store.widgets.filter((widget) => widget.id !== id);
+  discardTodoDraft(id);
   scheduleSave();
 }
 
@@ -1796,8 +1890,25 @@ export function locateSurface(key: string): void {
   if (!layout || !primary) return;
   const display = store.displays.find(item => item.id === layout.monitorId) ?? primary;
   Object.assign(layout, { visible: true, x: display.x + 28, y: display.y + 76,
+    monitorId: display.id, monitorBounds: { x: display.x, y: display.y },
     width: Math.min(layout.width, display.width - 56), height: Math.min(layout.height, display.height - 104), zIndex: nextZ() });
+  delete layout.displacedFrom;
   void setPaused(false); scheduleSave(); scheduleHitRectSync(); showStatus("已显示并定位到显示器左上方");
+}
+
+/** Viewing preserves a usable saved position, including locked surfaces. */
+export async function viewSurface(key: string): Promise<void> {
+  const layout = layoutFor(key);
+  if (!layout) { showStatus('桌面内容已不存在，请刷新后重试'); return; }
+  if (desktopGestureActive() || fileMoves.busy) { showStatus('正在移动或调整内容，请完成后再查看桌面'); return; }
+  if (!store.displays.length) { showStatus('暂时无法获取显示器信息，请刷新后重试'); return; }
+  try {
+    if (store.paused) { await setPausedNative(false); store.paused = false; }
+    recoverSurface(layout, store.displays);
+    layout.visible = true; layout.zIndex = nextZ();
+    scheduleHitRectSync(); await flushState();
+    await getCurrentWebviewWindow().hide();
+  } catch (error) { showStatus(`无法在桌面查看：${error}`); }
 }
 
 export function setWidgetVisible(id: string, visible: boolean): void {
@@ -1808,7 +1919,24 @@ export function setWidgetVisible(id: string, visible: boolean): void {
 export function pinEntry(entry: DesktopEntry): void {
   store.launcherReferences[entry.id] = { ...entry, canManage: false, iconPath: null };
   if (!store.launcherIds.includes(entry.id)) store.launcherIds.push(entry.id);
-  scheduleSave(); showStatus("已固定到快捷启动，原项目不移动");
+  scheduleSave(); showStatus("已固定到快捷启动，原项目不移动",
+    store.panelLayouts[LAUNCHER_PANEL_KEY]?.visible === true ? null : "show-launcher");
+}
+
+/** Explicit opt-in: show the launcher at its saved location, recovering only
+ * inaccessible layouts. Pinning a reference never changes visibility itself. */
+export async function setLauncherVisible(visible: boolean): Promise<void> {
+  if (visible && store.paused) {
+    try { await setPausedNative(false); }
+    catch (error) { showStatus(`无法显示快捷启动：${error}`); return; }
+    store.paused = false;
+  }
+  ensureLauncherLayout();
+  const layout = store.panelLayouts[LAUNCHER_PANEL_KEY]!;
+  if (visible) { recoverSurface(layout, store.displays); layout.zIndex = nextZ(); }
+  layout.visible = visible;
+  scheduleSave(); scheduleHitRectSync();
+  showStatus(visible ? "桌面启动栏已显示" : "桌面启动栏已隐藏，可在快捷启动页恢复");
 }
 
 export function reorderLauncher(id: string, direction: -1 | 1): void {
@@ -1844,14 +1972,20 @@ export async function launchEntries(entries: DesktopEntry[]): Promise<void> {
 }
 
 export async function executeOrganization(plan: { id: string; path: string; name: string }[], targetId: string): Promise<void> {
+  if (fileMoves.busy) { showStatus('正在整理文件，请等待本次操作完成'); return; }
   operationResults.splice(0);
-  for (const item of plan) {
+  const original = store.customGroups.find(group => group.id === targetId);
+  const dirName = original?.dirName;
+  const tasks = plan.map(item => ({ ...item, run: async () => {
     const entry = store.entries.find(entry => entry.id === item.id && entry.path === item.path);
     const target = store.customGroups.find(group => group.id === targetId);
-    if (!entry || !target || sourceFor(target).kind !== "zone") { operationResults.push({ ...item, ok: false, message: "来源或目标发生变化，请重新预览" }); continue; }
-    const moved = await moveItem(item.id, targetId);
-    operationResults.push({ ...item, ok: !!moved, message: moved ? "移动完成" : "移动失败，检查文件占用和权限后重试" });
-  }
+    if (!entry || !target || sourceFor(target).kind !== 'zone' || target.dirName !== dirName) throw new Error('来源或目标发生变化，请重新预览');
+    return moveItemOrThrow(item.id, targetId);
+  } }));
+  await trackFileMoves(original?.name ?? '已失效的目标', tasks, async report => {
+    operationResults.splice(0, operationResults.length, ...report.items.map(item => ({name:item.name,path:item.path,ok:item.state==='success',message:item.state==='success'?'移动完成':item.error})));
+    await rescan(); scheduleSave();
+  });
 }
 
 /** Reconnect an existing owned directory without creating, moving or renaming files. */

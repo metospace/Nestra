@@ -1,11 +1,17 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import UIcon from "@nuxt/ui/components/Icon.vue";
+import UInput from "@nuxt/ui/components/Input.vue";
 import { surfaceAppearance, surfaceVariables } from "@/domain/presentation";
 import type { ResizeDirection } from "@/composables/useSurfaceDrag";
 import { startMove, startResize } from "@/composables/useSurfaceDrag";
 import {
   bringToFront,
+  confirmDialog,
+  renameCustomGroup,
+  removeCustomGroup,
+  renameTabGroup,
+  removeTabGroup,
   openSurfaceSettings,
   dropTargetId,
   foldItem,
@@ -17,7 +23,7 @@ import {
   selectedEntries,
   batchMoveItems,
   pinEntry,
-  moveEntryToDesktop,
+  batchReturnItems,
   showStatus,
   store,
   setActiveTab,
@@ -29,6 +35,7 @@ import { showManager } from "@/lib/tauri";
 import ItemTile from "./ItemTile.vue";
 import Select from "@/ui/Select.vue";
 import { sourceFor, dropDescription } from "@/domain/sources";
+import { fileMoves, openMoveResults } from '@/composables/fileMoveReports';
 import { fileFilters, matchesFilter } from "@/lib/organizer";
 import { itemsByPanel, mappingErrors, updateGroupView } from "@/stores/state";
 
@@ -62,14 +69,43 @@ const appearance = computed(() => surfaceAppearance(layout.value!, store.appeara
 const variables = computed(() => surfaceVariables(layout.value!, store.appearance));
 const searchVisible = ref(false), searchInput = ref<HTMLInputElement | null>(null);
 const more = ref<{x:number;y:number}|null>(null);
-function toggleMore(event:MouseEvent){more.value=more.value?null:{x:Math.max(8,Math.min(event.clientX-200,window.innerWidth-250)),y:Math.max(8,Math.min(event.clientY+8,window.innerHeight-370))};}
+function openMore(event:MouseEvent){more.value={x:Math.max(8,Math.min(event.clientX-200,window.innerWidth-250)),y:Math.max(8,Math.min(event.clientY+8,window.innerHeight-500))};}
+function toggleMore(event:MouseEvent){if(more.value)more.value=null;else openMore(event);}
+const canManage = computed(() => Boolean(rootGroup.value || tabModel.value));
+const renaming = ref(false), nameDraft = ref(''), renameBusy = ref(false);
+const nameInput = ref<{ inputRef: HTMLInputElement } | null>(null);
+async function beginRename(){
+  if(!canManage.value || renameBusy.value)return;
+  more.value=null;nameDraft.value=tabModel.value?.name??rootGroup.value!.name;renaming.value=true;
+  await nextTick();nameInput.value?.inputRef?.focus();nameInput.value?.inputRef?.select();
+}
+async function saveName(){
+  const name=nameDraft.value.trim();
+  if(!name || renameBusy.value)return;
+  renameBusy.value=true;
+  try{
+    if(tabModel.value)renameTabGroup(tabModel.value.id,name);
+    else if(rootGroup.value)await renameCustomGroup(rootGroup.value.id,name);
+    if((tabModel.value?.name??rootGroup.value?.name)===name)renaming.value=false;
+  }finally{renameBusy.value=false;}
+}
+function nameKey(event:KeyboardEvent){
+  if(event.isComposing || event.keyCode===229)return;
+  if(event.key==='Enter'){event.preventDefault();void saveName();}
+  if(event.key==='Escape' && !renameBusy.value){event.preventDefault();renaming.value=false;}
+}
+async function deleteSurface(){
+  more.value=null;
+  if(tabModel.value){const id=tabModel.value.id;if(await confirmDialog('删除此标签组？各个收纳区会恢复独立显示，文件保持原位。'))removeTabGroup(id);}
+  else if(rootGroup.value)await removeCustomGroup(rootGroup.value.id);
+}
 function settings(){more.value=null;openSurfaceSettings(props.panel.key);}
 async function toggleSearch(){searchVisible.value=!searchVisible.value;if(searchVisible.value){await nextTick();searchInput.value?.focus();}else localQuery.value='';}
 const selected = computed(()=>store.selectionPanel===panel.value.key?selectedEntries.value.filter(e=>visibleEntries.value.some(v=>v.id===e.id)):[]);
 const moveTarget=ref(''), batchBusy=ref(false);
 const targets=computed(()=>store.customGroups.filter(g=>g.id!==activeGroup.value?.id&&sourceFor(g).writable).map(g=>({label:g.name,value:g.id})));
 async function moveSelected(){if(!moveTarget.value||batchBusy.value)return;batchBusy.value=true;try{await batchMoveItems(selected.value.map(e=>e.id),moveTarget.value);more.value=null;}finally{batchBusy.value=false;}}
-async function returnSelected(){if(batchBusy.value)return;batchBusy.value=true;try{for(const e of [...selected.value])await moveEntryToDesktop(e.id);}finally{batchBusy.value=false;}}
+async function returnSelected(){if(batchBusy.value)return;batchBusy.value=true;try{await batchReturnItems(selected.value.filter(e=>e.zone).map(e=>e.id));}finally{batchBusy.value=false;}}
 const selectionBox=ref<{x:number;y:number;width:number;height:number}|null>(null);
 function startBox(event:PointerEvent){
   if(event.button!==0||(event.target as HTMLElement).closest('.tile,button,input,select'))return;
@@ -161,9 +197,12 @@ function onBodyDrop(event: DragEvent): void {
 /* 移动与缩放 ----------------------------------------------------------- */
 
 function onHeaderPointerDown(event: PointerEvent): void {
-  if (!layout.value || (event.target as HTMLElement).closest("button")) return;
+  if (!layout.value || renaming.value || (event.target as HTMLElement).closest("button,input")) return;
   bringToFront(props.panel.key);
   startMove(event, layout.value, { minWidth: MIN_W, minHeight: MIN_H });
+}
+function onHeaderDoubleClick(event: MouseEvent): void {
+  if (!(event.target as HTMLElement).closest('button,input')) void beginRename();
 }
 
 const resizeHandles: { direction: ResizeDirection; className: string }[] = [
@@ -210,11 +249,18 @@ function onRefresh(): void {
     @dragenter.prevent="onDragEnter"
     @dragleave="onDragLeave"
   >
-    <header class="panel-header organizer-heading select-none" @pointerdown="onHeaderPointerDown">
-      <div class="organizer-title"><h2>{{tabModel?.name??panel.title}}</h2><small>{{items.length}} 项 · {{writable?'真实收纳':activeGroup?.mappedPath?'文件夹映射':'浏览视图'}}</small></div>
+    <header class="panel-header organizer-heading select-none" @pointerdown="onHeaderPointerDown" @dblclick="onHeaderDoubleClick" @contextmenu.prevent.stop="openMore">
+      <template v-if="renaming">
+        <UInput ref="nameInput" v-model="nameDraft" class="organizer-name-input" size="sm" aria-label="收纳区名称" :disabled="renameBusy" @pointerdown.stop @keydown="nameKey" />
+        <button class="icon-button" aria-label="保存名称" :disabled="renameBusy || !nameDraft.trim()" @pointerdown.stop @click="saveName"><UIcon name="i-lucide-check"/></button>
+        <button class="icon-button" aria-label="取消重命名" :disabled="renameBusy" @pointerdown.stop @click="renaming=false"><UIcon name="i-lucide-x"/></button>
+      </template>
+      <template v-else>
+      <div class="organizer-title" :title="canManage ? '双击重命名 · 右键更多操作' : undefined"><h2>{{tabModel?.name??panel.title}}</h2></div>
       <button class="icon-button" :class="{'is-active':searchVisible}" title="搜索此栏" aria-label="搜索此栏" @pointerdown.stop @click="toggleSearch"><UIcon name="i-lucide-search"/></button>
-      <button class="icon-button" data-surface-settings-trigger title="此栏样式与布局" aria-label="此栏样式与布局" @pointerdown.stop @click="settings"><UIcon name="i-lucide-sliders-horizontal"/></button>
+      <button class="icon-button" :class="{'is-active':store.surfaceSettingsKey===panel.key}" :aria-expanded="store.surfaceSettingsKey===panel.key" data-surface-settings-trigger title="此栏样式与布局" aria-label="此栏样式与布局" @pointerdown.stop @click="settings"><UIcon name="i-lucide-sliders-horizontal"/></button>
       <button class="icon-button" title="更多操作" aria-label="更多操作" @pointerdown.stop @click="toggleMore"><UIcon name="i-lucide-ellipsis"/></button>
+      </template>
     </header>
     <div v-if="tabModel" class="flex shrink-0 gap-1 overflow-x-auto px-2 pt-2" role="tablist" :aria-label="tabModel?.name ?? '收纳区标签页'">
       <button role="tab" :aria-selected="aggregate" class="shrink-0 rounded px-3 py-2 text-xs" @pointerdown.stop @click="tabModel && setActiveTab(tabModel.id, '__all__')">全部来源</button>
@@ -225,7 +271,7 @@ function onRefresh(): void {
         @pointerdown.stop @click="tabModel && setActiveTab(tabModel.id, group.id)">{{ group.name }}</button>
     </div>
     <div v-if="searchVisible" class="organizer-search"><input ref="searchInput" v-model="localQuery" placeholder="搜索此栏中的文件…" aria-label="搜索此栏中的文件" @pointerdown.stop @keydown.escape="searchVisible=false;localQuery=''"/><button class="icon-button" aria-label="关闭栏内搜索" @click="searchVisible=false;localQuery=''"><UIcon name="i-lucide-x"/></button></div>
-    <div v-if="selected.length" class="organizer-selection"><span>已选 {{selected.length}} 项</span><button :disabled="batchBusy" @click="selected.forEach(e=>pinEntry(e));showStatus('已添加快捷引用，文件未移动')">固定</button><button :disabled="batchBusy" @click="toggleMore">移动到…</button><button v-if="selected.some(e=>e.zone)" :disabled="batchBusy" @click="returnSelected">放回桌面</button><button aria-label="清除选择" @click="selectPanelItems(panel.key,[])"><UIcon name="i-lucide-x"/></button></div>
+    <div v-if="selected.length > 1" class="organizer-selection"><span>已选 {{selected.length}} 项</span><button :disabled="batchBusy" @click="selected.forEach(e=>pinEntry(e));showStatus('已添加快捷引用，文件未移动')">固定</button><button :disabled="batchBusy" @click="toggleMore">移动到…</button><button v-if="selected.some(e=>e.zone)" :disabled="batchBusy" @click="returnSelected">放回桌面</button><button aria-label="清除选择" @click="selectPanelItems(panel.key,[])"><UIcon name="i-lucide-x"/></button></div>
     <p v-if="mappingErrors[panel.groupId]" role="status" class="m-0 px-3 pb-2 text-xs text-amber-300">{{ mappingErrors[panel.groupId] }}</p>
     <p v-else-if="items.length && !filteredItems.length" class="m-0 px-3 pb-2 text-xs">没有符合此分类的项目</p>
     <!-- 折叠预览条：可直接拖回分区或桌面 -->
@@ -249,7 +295,8 @@ function onRefresh(): void {
 
     <!-- 内容网格 -->
     <div
-      class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-2"
+      class="organizer-content min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-2"
+      :class="{ 'has-selection': selected.length > 1 }"
       @pointerdown="startBox"
       @dragover.prevent
       @drop.prevent.stop="onBodyDrop"
@@ -281,15 +328,16 @@ function onRefresh(): void {
       </div>
     </div>
 
-    <footer class="organizer-footer"><span :title="dropLabel"><UIcon :name="writable?'i-lucide-move-right':'i-lucide-eye'"/>{{writable?'拖入文件会移动到此目录':'只浏览 · 原文件保持原位'}}</span><button v-if="foldedEntries.length" data-fold-target @click="onFoldChipClick">已折叠 {{foldedEntries.length}}</button><span v-else-if="localQuery">{{visibleEntries.length}} 个匹配</span></footer>
     <Teleport to="body"><div v-if="more" class="nestra-hit surface-menu-backdrop" @pointerdown.stop @click="more=null"><div class="nestra-hit surface-menu" :style="{left:`${more.x}px`,top:`${more.y}px`}" @click.stop>
       <strong>{{tabModel?.name??panel.title}}</strong>
+      <button v-if="canManage" @click="beginRename"><UIcon name="i-lucide-pencil"/>重命名</button>
+      <button v-if="canManage" class="organizer-delete" @click="deleteSurface"><UIcon name="i-lucide-trash-2"/>{{tabModel?'删除标签组':'删除收纳区'}}</button>
       <button @click="settings"><UIcon name="i-lucide-sliders-horizontal"/>样式与布局</button><button @click="more=null;showManager('files',activeGroup?.id)"><UIcon name="i-lucide-folder-cog"/>管理内容与来源</button>
       <label>文件筛选<Select :model-value="aggregate?aggregateFilter:activeGroup?.filter??'all'" :options="[...fileFilters]" optionLabel="label" optionValue="value" overlayClass="nestra-hit nestra-select-overlay" @update:model-value="(v:CustomGroupDefinition['filter'])=>aggregate?aggregateFilter=v:updateGroupView(panel.groupId,{filter:v})"/></label>
       <div v-if="selected.length" class="surface-menu-batch"><label>移动选中的 {{selected.length}} 项<Select v-model="moveTarget" :options="targets" optionLabel="label" optionValue="value" overlayClass="nestra-hit nestra-select-overlay"/></label><button :disabled="!moveTarget||batchBusy" @click="moveSelected">{{batchBusy?'正在移动…':'执行移动'}}</button></div>
       <button @click="selectPanelItems(panel.key,visibleEntries.map(e=>e.id));more=null"><UIcon name="i-lucide-check-check"/>选择全部可见项目</button>
       <button data-fold-target @dragover.prevent @drop.prevent.stop="onFoldDrop" @click="onFoldChipClick();more=null"><UIcon name="i-lucide-panel-top-close"/>{{showFolded?'收起折叠项目':'展开折叠项目'}}</button>
-      <button @click="more=null;showManager('data')"><UIcon name="i-lucide-history"/>查看移动记录</button><button @click="onRefresh();more=null"><UIcon name="i-lucide-refresh-cw"/>刷新文件</button><button @click="setPanelVisible(props.panel.key,false);more=null"><UIcon name="i-lucide-eye-off"/>隐藏此栏</button>
+      <button v-if="fileMoves.reports.length" @click="more=null;openMoveResults()"><UIcon name="i-lucide-list-checks"/>本次整理结果</button><button @click="more=null;showManager('data')"><UIcon name="i-lucide-history"/>查看移动记录</button><button @click="onRefresh();more=null"><UIcon name="i-lucide-refresh-cw"/>刷新文件</button><button @click="setPanelVisible(props.panel.key,false);more=null"><UIcon name="i-lucide-eye-off"/>隐藏此栏</button>
     </div></div><div v-if="selectionBox" class="selection-box" :style="{left:`${selectionBox.x}px`,top:`${selectionBox.y}px`,width:`${selectionBox.width}px`,height:`${selectionBox.height}px`}"/></Teleport>
     <!-- 缩放手柄 -->
     <div
@@ -303,6 +351,10 @@ function onRefresh(): void {
 </template>
 
 <style scoped>
+.organizer-content{padding-top:2px}
+.organizer-selection{position:absolute;left:12px;right:12px;bottom:12px;z-index:2;margin:0;background:var(--nestra-surface);border:1px solid var(--nestra-line);box-shadow:0 6px 20px #0002}
+.organizer-content.has-selection{padding-bottom:56px}
+.organizer-name-input{flex:1;min-width:0}.organizer-delete{color:var(--color-red-400)}
 .fold-chip {
   display: inline-flex;
   align-items: center;

@@ -1,5 +1,15 @@
 import type { PersistedState } from "@/types";
 import { referenceFromId } from "./sources";
+import type { AppearanceSettings } from "@/types";
+
+export const FROST_APPEARANCE: AppearanceSettings = {
+  styleVersion: 1,
+  theme: "dark",
+  surfaceMaterial: "glass",
+  cornerStyle: "rounded",
+  borderStyle: "subtle",
+  panelOpacity: 0.88,
+};
 
 function object(value: unknown): value is Record<string, any> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -70,6 +80,11 @@ export function migrateConfiguration(input: PersistedState): PersistedState {
   if ((input.schemaVersion ?? 1) > 2) throw new Error("配置来自更新版本，当前版本不会覆盖它");
   const next = structuredClone(input);
   next.schemaVersion = 2;
+  // Adopt the approved design once. Independent surfaces and all file/layout
+  // data stay intact; subsequent light-theme or material choices are retained.
+  if (!next.appearance?.styleVersion) {
+    next.appearance = { ...next.appearance, ...FROST_APPEARANCE };
+  }
   next.panelLayouts ??= {};
   next.customGroups ??= [];
   next.widgets ??= [];

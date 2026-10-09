@@ -51,7 +51,7 @@ pub fn set_clipboard_enabled(enabled: bool) { crate::clipboard::set_enabled(enab
 
 #[tauri::command]
 pub async fn pick_file() -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(|| pick_path_blocking(false)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(|| pick_path_isolated(false)).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -94,6 +94,7 @@ pub async fn search_everything(query: String, limit: usize) -> Result<crate::eve
 #[serde(rename_all = "camelCase")]
 pub struct DisplayInfo {
     pub id: String,
+    pub legacy_id: String,
     pub name: String,
     pub x: f64,
     pub y: f64,
@@ -117,7 +118,8 @@ pub fn list_displays(app: AppHandle) -> Result<Vec<DisplayInfo>, String> {
             candidate.position() == position && candidate.size() == size);
         let name = monitor.name().cloned().unwrap_or_else(|| "显示器".into());
         DisplayInfo {
-            id: name.clone(),
+            id: crate::win32::monitor_identity(&name),
+            legacy_id: name.clone(),
             name,
             x: (position.x - origin_x) as f64 / scale,
             y: (position.y - origin_y) as f64 / scale,
@@ -130,13 +132,13 @@ pub fn list_displays(app: AppHandle) -> Result<Vec<DisplayInfo>, String> {
 
 #[tauri::command]
 pub async fn pick_folder() -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(|| pick_path_blocking(true))
+    tauri::async_runtime::spawn_blocking(|| pick_path_isolated(true))
         .await
         .map_err(|error| error.to_string())?
 }
 
 #[cfg(windows)]
-fn pick_path_blocking(folder: bool) -> Result<Option<String>, String> {
+pub(crate) fn pick_path_blocking(folder: bool) -> Result<Option<String>, String> {
     use windows::core::{w, Interface};
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize,
@@ -221,19 +223,17 @@ pub async fn resolve_icon_pairs(
 ) -> HashMap<String, Option<String>> {
     let cache_dir = paths::icon_cache_dir(&app);
     tauri::async_runtime::spawn_blocking(move || {
-        let mut out = HashMap::with_capacity(pairs.len());
-        for pair in pairs {
-            let primary = pair[0].clone();
-            let png = crate::icons::icon_png_for(&primary, cache_dir.clone())
-                .or_else(|| crate::icons::icon_png_for(&pair[1], cache_dir.clone()));
-            out.insert(primary, png);
-        }
-        out
+        crate::icons::resolve_pairs(pairs, cache_dir)
     }).await.unwrap_or_default()
 }
 
 #[tauri::command]
-pub fn open_entry(target: String, launch_kind: String) -> Result<(), String> {
+pub async fn open_entry(target: String, launch_kind: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || open_entry_blocking(target, launch_kind))
+        .await.map_err(|e| e.to_string())?
+}
+
+fn open_entry_blocking(target: String, launch_kind: String) -> Result<(), String> {
     if launch_kind == "shell" || target.starts_with("shell:") || target.starts_with("http") {
         // Explorer resolves `shell:` URIs such as MyComputerFolder.
         std::process::Command::new("explorer.exe")
@@ -250,7 +250,11 @@ pub fn open_entry(target: String, launch_kind: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn reveal_entry(path: String) -> Result<(), String> {
+pub async fn reveal_entry(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || reveal_entry_blocking(path)).await.map_err(|e| e.to_string())?
+}
+
+fn reveal_entry_blocking(path: String) -> Result<(), String> {
     let meta = std::fs::metadata(&path).map_err(|error| error.to_string())?;
     if meta.is_dir() {
         return shell_execute_open(&path);
@@ -260,14 +264,35 @@ pub fn reveal_entry(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn load_state(app: AppHandle) -> Value {
-    let Some(file) = paths::state_file(&app) else {
-        return Value::Null;
-    };
+pub fn load_state(app: AppHandle) -> Result<Value, String> {
+    let file = paths::state_file(&app).ok_or("无法确定状态文件位置")?;
+    read_state_file(&file)
+}
 
-    match std::fs::read_to_string(&file) {
-        Ok(text) => serde_json::from_str::<Value>(&text).unwrap_or(Value::Null),
-        Err(_) => Value::Null,
+fn read_state_file(file: &std::path::Path) -> Result<Value, String> {
+    match std::fs::read_to_string(file) {
+        Ok(text) => serde_json::from_str::<Value>(&text).map_err(|e| format!("配置读取失败：{e}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
+        Err(e) => Err(format!("配置读取失败：{e}")),
+    }
+}
+
+#[cfg(test)]
+mod state_read_tests {
+    use super::*;
+    #[test]
+    fn broken_or_unreadable_configuration_is_not_a_new_workspace() {
+        let dir = std::env::temp_dir().join(format!("nestra-state-read-{}-{}", std::process::id(), chrono::Local::now().timestamp_nanos_opt().unwrap()));
+        std::fs::create_dir(&dir).unwrap();
+        let file = dir.join("state.json");
+        assert_eq!(read_state_file(&file).unwrap(), Value::Null);
+        std::fs::write(&file, b"{broken").unwrap();
+        assert!(read_state_file(&file).is_err());
+        assert!(read_state_file(&dir).is_err());
+        std::fs::write(&file, br#"{"panelLayouts":{"zone:one":{"x":450,"y":200}}}"#).unwrap();
+        assert_eq!(read_state_file(&file).unwrap()["panelLayouts"]["zone:one"]["x"], 450);
+        std::fs::remove_file(file).unwrap();
+        std::fs::remove_dir(dir).unwrap();
     }
 }
 
@@ -490,8 +515,7 @@ pub fn release_desktop_input() {
 }
 
 #[tauri::command]
-pub fn show_shell_menu(
-    app: AppHandle,
+pub async fn show_shell_menu(
     path: String,
     x: i32,
     y: i32,
@@ -502,11 +526,17 @@ pub fn show_shell_menu(
 ) -> Result<String, String> {
     #[cfg(windows)]
     {
-        crate::shell_menu::show(&app, &path, x, y, to_desktop, in_launcher, can_fold, can_rename)
+        tauri::async_runtime::spawn_blocking(move || {
+            let request = crate::shell_worker::Request::Menu { menu: crate::shell_worker::MenuRequest {
+                path, x, y, to_desktop, in_launcher, can_fold, can_rename,
+            }};
+            crate::shell_worker::execute(&request, std::time::Duration::from_secs(300))?
+                .as_str().map(str::to_owned).ok_or_else(|| "系统菜单返回无效".into())
+        }).await.map_err(|e| e.to_string())?
     }
     #[cfg(not(windows))]
     {
-        let _ = (app, path, x, y, to_desktop, in_launcher, can_fold, can_rename);
+        let _ = (path, x, y, to_desktop, in_launcher, can_fold, can_rename);
         Err("仅支持 Windows".into())
     }
 }
@@ -536,6 +566,24 @@ pub fn clip_clear(app: AppHandle) {
 
 /// Opens an arbitrary path (file, folder or URL) through the shell.
 fn shell_execute_open(target: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    crate::shell_worker::execute(&crate::shell_worker::Request::Open { target: target.into() }, std::time::Duration::from_secs(30))?;
+    #[cfg(not(windows))]
+    let _ = target;
+    Ok(())
+}
+
+fn pick_path_isolated(folder: bool) -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    {
+        let result = crate::shell_worker::execute(&crate::shell_worker::Request::Pick { folder }, std::time::Duration::from_secs(600))?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
+    }
+    #[cfg(not(windows))]
+    pick_path_blocking(folder)
+}
+
+pub(crate) fn shell_execute_open_native(target: &str) -> Result<(), String> {
     #[cfg(windows)]
     {
         use windows::core::{HSTRING, PCWSTR};

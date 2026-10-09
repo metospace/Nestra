@@ -32,13 +32,57 @@ pub fn icon_png_for(path: &str, cache_dir: Option<std::path::PathBuf>) -> Option
             return None;
         }
 
-        if extract_to(path, &cached).is_some() {
+        // Mark BEFORE loading native DLLs. A crashing helper leaves a negative
+        // cache entry so the parent can skip that path and finish the batch.
+        std::fs::write(&failed, b"").ok()?;
+        let temporary = cached.with_extension("png.tmp");
+        if extract_to(path, &temporary).is_some() && std::fs::rename(&temporary, &cached).is_ok() {
+            let _ = std::fs::remove_file(&failed);
             return Some(cached.to_string_lossy().into_owned());
         }
         let _ = std::fs::write(&failed, b"");
     }
 
     None
+}
+
+/// Cache hits stay in the host. Only uncached paths cross the process boundary,
+/// in small batches; a broken item cannot prevent the remaining icons loading.
+pub fn resolve_pairs(pairs: Vec<[String; 2]>, cache_dir: Option<std::path::PathBuf>) -> std::collections::HashMap<String, Option<String>> {
+    use std::collections::HashSet;
+    let Some(dir) = cache_dir.filter(|dir| crate::paths::ensure_dir(dir)) else {
+        return pairs.into_iter().map(|pair| (pair[0].clone(), None)).collect();
+    };
+    cleanup_stale_once(&dir);
+    // Separate windows can request the same path; don't launch duplicate workers
+    // or mistake another worker's in-progress marker for a permanent failure.
+    static RESOLVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let Ok(_guard) = RESOLVE_LOCK.lock() else { return Default::default(); };
+    let mut seen = HashSet::new();
+    let mut pending: Vec<String> = pairs.iter().flat_map(|pair| pair.iter()).filter(|path|
+        !path.is_empty() && seen.insert((*path).clone())
+        && !dir.join(format!("{}.png", cache_key(path))).exists()
+        && !dir.join(format!("{}.fail", cache_key(path))).exists()).cloned().collect();
+    while !pending.is_empty() {
+        let batch: Vec<String> = pending.iter().take(16).cloned().collect();
+        let request = crate::shell_worker::Request::Icons { paths: batch.clone(), cache_dir: dir.clone() };
+        let _ = crate::shell_worker::execute(&request, std::time::Duration::from_secs(15));
+        let old_len = pending.len();
+        pending.retain(|path| !dir.join(format!("{}.png", cache_key(path))).exists()
+            && !dir.join(format!("{}.fail", cache_key(path))).exists());
+        // If the process couldn't start, stop rather than spinning forever.
+        if pending.len() == old_len {
+            for path in &pending { let _ = std::fs::write(dir.join(format!("{}.fail", cache_key(path))), b""); }
+            break;
+        }
+    }
+    pairs.into_iter().map(|pair| {
+        let png = pair.iter().find_map(|path| {
+            let file = dir.join(format!("{}.png", cache_key(path)));
+            file.exists().then(|| file.to_string_lossy().into_owned())
+        });
+        (pair[0].clone(), png)
+    }).collect()
 }
 
 /// 每个进程只跑一次：清掉 30 天前的 .png/.fail 缓存，防止无限增长。
@@ -165,7 +209,7 @@ fn extract_to(path: &str, destination: &Path) -> Option<()> {
             ICON_SIZE as u32,
             pixels,
         )?;
-        image.save(destination).ok()?;
+        image.save_with_format(destination, image::ImageFormat::Png).ok()?;
         Some(())
     }
 }

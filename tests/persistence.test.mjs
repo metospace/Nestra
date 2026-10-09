@@ -24,7 +24,7 @@ test("receiving an existing layout never schedules a broadcast back to the other
   const layoutCode = ts.transpile(fn.getText(ast), { target: ts.ScriptTarget.ES2022 });
   let saves = 0;
   const context = vm.createContext({
-    store: { panels: [{ key: "zone:one" }], panelLayouts: { "zone:one": { x: 20, y: 20 } } },
+    store: { displays: [], panels: [{ key: "zone:one" }], panelLayouts: { "zone:one": { x: 20, y: 20 } } },
     window: { screen: { width: 1920 }, innerWidth: 1920 },
     SCREEN_MARGIN: 18, PANEL_WIDTH: 336, PANEL_GAP: 20, PANEL_HEIGHT: 432,
     LAUNCHER_PANEL_KEY: "system:launcher", zCounter: 0, scheduleSave: () => { saves++; },
@@ -145,4 +145,34 @@ test('Rust-sorted disk keys do not turn a style reset into a conflicting remote 
  const disk=canonical(base);assert.notEqual(JSON.stringify(disk.panelLayouts.zone),JSON.stringify(base.panelLayouts.zone));
  const merged=c.mergePersisted(base,local,disk);assert.equal(merged.panelLayouts.zone.appearance,undefined);assert.equal(merged.panelLayouts.zone.x,20);
  const reordered=plain(base);reordered.appearance={panelOpacity:.95,cornerStyle:'standard'};const changed=plain(reordered);changed.appearance.cornerStyle='rounded';const outcome=c.mergePersisted(reordered,canonical(reordered),changed);assert.equal(outcome.appearance.cornerStyle,'rounded');
+});
+
+function todoState(context) {
+ const state=context.snapshotFromStore();
+ state.widgets=[{id:'tasks',kind:'todo',title:'待办',content:'',layout:{x:10,y:20},todos:[{id:'a',text:'资料',completed:false},{id:'b',text:'评审',completed:false}]}];
+ return state;
+}
+test('desktop and manager retain independent task edits and additions in one widget',()=>{
+ const c=setup(),base=todoState(c),local=plain(base),remote=plain(base);
+ local.widgets[0].todos[0].completed=true;
+ local.widgets[0].todos.push({id:'desktop-added',text:'桌面新增',completed:false});
+ remote.widgets[0].todos[1].text='更新评审资料';
+ remote.widgets[0].todos.push({id:'manager-added',text:'应用新增',completed:false});
+ const todos=plain(c.mergePersisted(base,local,remote).widgets[0].todos);
+ assert.deepEqual(todos.map(t=>t.id),['a','b','desktop-added','manager-added']);
+ assert.equal(todos[0].completed,true);assert.equal(todos[1].text,'更新评审资料');
+});
+test('a task deletion survives concurrent widget movement and same-task conflicts converge remotely',()=>{
+ const c=setup(),base=todoState(c),local=plain(base),remote=plain(base);
+ local.widgets[0].todos=local.widgets[0].todos.filter(t=>t.id!=='a');
+ local.widgets[0].todos[0].text='本地修改';
+ remote.widgets[0].layout.x=250;
+ remote.widgets[0].todos[1].text='远端修改';
+ const widget=plain(c.mergePersisted(base,local,remote).widgets[0]);
+ assert.deepEqual(widget.todos,[{id:'b',text:'远端修改',completed:false}]);assert.equal(widget.layout.x,250);
+});
+test('a deleted todo widget is not revived by nested task merging',()=>{
+ const c=setup(),base=todoState(c),local=plain(base),remote=plain(base);
+ local.widgets=[];remote.widgets[0].todos.push({id:'new',text:'新增',completed:false});
+ assert.deepEqual(plain(c.mergePersisted(base,local,remote).widgets),[]);
 });

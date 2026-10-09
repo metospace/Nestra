@@ -10,6 +10,16 @@ for(const path of ['src/domain/sources.ts','src/domain/configuration.ts']){
  vm.runInContext(ts.transpile(code,{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}),context);
 }
 const config=()=>({schemaVersion:1,customGroups:[{id:'zone',name:'文档',dirName:'文档'},{id:'map',name:'工作资料',dirName:'D:/Work',mappedPath:'D:/Work'}],tabGroups:[{id:'work',name:'工作',groupIds:['zone','map'],activeGroupId:'map'}],panelLayouts:{'zone:zone':{x:30,y:90,width:320,height:380,zIndex:2,visible:true}},widgets:[],launcherIds:['file:D:/offline/file.txt'],foldedItems:{},itemOrders:{},appearance:{surfaceMaterial:'matte',cornerStyle:'standard',borderStyle:'subtle',panelOpacity:.95},startWithWindows:true});
+test('visual upgrade runs once, preserving independent styles, file references and later user choices',()=>{
+ const old=config();old.panelLayouts['zone:zone'].appearance={surfaceMaterial:'clear',backgroundColor:'#ffffff'};
+ const next=context.migrateConfiguration(old);
+ assert.equal(next.appearance.theme,'dark');assert.equal(next.appearance.surfaceMaterial,'glass');assert.equal(next.appearance.styleVersion,1);
+ assert.deepEqual(JSON.parse(JSON.stringify(next.panelLayouts['zone:zone'])),old.panelLayouts['zone:zone']);
+ assert.deepEqual(Array.from(next.launcherIds),old.launcherIds);
+ next.appearance.theme='light';next.appearance.surfaceMaterial='matte';next.appearance.panelOpacity=.6;
+ const later=context.migrateConfiguration(next);assert.deepEqual(JSON.parse(JSON.stringify(later.appearance)),JSON.parse(JSON.stringify(next.appearance)));
+ assert.equal(old.appearance.styleVersion,undefined);
+});
 test('schema migration preserves old moves and stable identities, keeps offline references and independent group layout',()=>{
  const old=config(),before=JSON.stringify(old),next=context.migrateConfiguration(old);
  assert.equal(JSON.stringify(old),before);assert.equal(next.schemaVersion,2);assert.equal(next.customGroups[1].dropPolicy,'move');assert.equal(next.customGroups[1].id,'map');assert.ok(next.launcherReferences[old.launcherIds[0]]);assert.deepEqual(JSON.parse(JSON.stringify(next.panelLayouts['tabs:work'])),old.panelLayouts['zone:zone']);
