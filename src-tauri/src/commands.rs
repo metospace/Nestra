@@ -264,57 +264,16 @@ fn reveal_entry_blocking(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn load_state(app: AppHandle) -> Result<Value, String> {
+pub async fn load_state(app: AppHandle) -> Result<Value, String> {
     let file = paths::state_file(&app).ok_or("无法确定状态文件位置")?;
-    read_state_file(&file)
-}
-
-fn read_state_file(file: &std::path::Path) -> Result<Value, String> {
-    match std::fs::read_to_string(file) {
-        Ok(text) => serde_json::from_str::<Value>(&text).map_err(|e| format!("配置读取失败：{e}")),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
-        Err(e) => Err(format!("配置读取失败：{e}")),
-    }
-}
-
-#[cfg(test)]
-mod state_read_tests {
-    use super::*;
-    #[test]
-    fn broken_or_unreadable_configuration_is_not_a_new_workspace() {
-        let dir = std::env::temp_dir().join(format!("nestra-state-read-{}-{}", std::process::id(), chrono::Local::now().timestamp_nanos_opt().unwrap()));
-        std::fs::create_dir(&dir).unwrap();
-        let file = dir.join("state.json");
-        assert_eq!(read_state_file(&file).unwrap(), Value::Null);
-        std::fs::write(&file, b"{broken").unwrap();
-        assert!(read_state_file(&file).is_err());
-        assert!(read_state_file(&dir).is_err());
-        std::fs::write(&file, br#"{"panelLayouts":{"zone:one":{"x":450,"y":200}}}"#).unwrap();
-        assert_eq!(read_state_file(&file).unwrap()["panelLayouts"]["zone:one"]["x"], 450);
-        std::fs::remove_file(file).unwrap();
-        std::fs::remove_dir(dir).unwrap();
-    }
+    tauri::async_runtime::spawn_blocking(move || crate::persistence::load(&file)).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn save_state(app: AppHandle, state: Value, origin: Option<String>, expected: Option<Value>) -> Result<(), String> {
-    static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = WRITE_LOCK.lock().map_err(|error| error.to_string())?;
+pub async fn save_state(app: AppHandle, state: Value, origin: Option<String>, expected: Option<Value>) -> Result<(), String> {
     let file = paths::state_file(&app).ok_or_else(|| "无法确定状态文件位置".to_string())?;
-    if let Some(parent) = file.parent() {
-        paths::ensure_dir(parent);
-    }
-
-    let current = match std::fs::read_to_string(&file) {
-        Ok(text) => serde_json::from_str::<Value>(&text).map_err(|error| error.to_string())?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Value::Null,
-        Err(error) => return Err(error.to_string()),
-    };
-    if current != expected.unwrap_or(Value::Null) { return Err("STATE_CONFLICT".into()); }
-    let temporary = file.with_extension("json.tmp");
-    let text = serde_json::to_string_pretty(&state).map_err(|error| error.to_string())?;
-    std::fs::write(&temporary, text).map_err(|error| error.to_string())?;
-    std::fs::rename(&temporary, &file).map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || crate::persistence::save(&file, &state, &expected.unwrap_or(Value::Null)))
+        .await.map_err(|e| e.to_string())??;
 
     let _ = app.emit(
         crate::STATE_CHANGED_EVENT,

@@ -18,6 +18,7 @@ mod shell_menu;
 #[cfg(windows)]
 mod shell_worker;
 mod paths;
+mod persistence;
 mod scanner;
 mod session;
 #[cfg(windows)]

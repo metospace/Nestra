@@ -20,6 +20,29 @@ test('visual upgrade runs once, preserving independent styles, file references a
  const later=context.migrateConfiguration(next);assert.deepEqual(JSON.parse(JSON.stringify(later.appearance)),JSON.parse(JSON.stringify(next.appearance)));
  assert.equal(old.appearance.styleVersion,undefined);
 });
+
+test('existing owned directories recover even when their configuration is missing', () => {
+ const zones=[{dirName:'AI IDE'},{dirName:'开发工具'},{dirName:'Empty'}];
+ const groups=context.reconcileStorageZones([],zones);
+ assert.deepEqual(Array.from(groups,g=>g.dirName),zones.map(z=>z.dirName));
+ assert.ok(groups.every(g=>g.sourceKind==='zone'&&g.dropPolicy==='move'));
+ const otherWindow=context.reconcileStorageZones([],zones);
+ assert.deepEqual(Array.from(groups,g=>g.id),Array.from(otherWindow,g=>g.id));
+ assert.equal(context.reconcileStorageZones(groups,zones).length,3);
+});
+
+test('directory recovery preserves existing identities and does not confuse mappings or categories with owned zones', () => {
+ const groups=[{id:'original',name:'我的工具',dirName:'AI IDE'},
+   {id:'mapping',name:'Mapping',dirName:'开发工具',mappedPath:'D:/Tools'},
+   {id:'category',name:'Category',dirName:'Empty',sourceKind:'category'}];
+ const before=JSON.stringify(groups);
+ const recovered=context.reconcileStorageZones(groups,[{dirName:'ai ide'},{dirName:'开发工具'},{dirName:'Empty'},{dirName:'EMPTY'}]);
+ assert.equal(JSON.stringify(groups),before);
+ assert.equal(recovered.length,5);
+ assert.equal(recovered[0],groups[0]);
+ assert.equal(recovered[0].name,'我的工具');
+ assert.equal(recovered.filter(g=>!g.mappedPath&&g.sourceKind!=='category'&&g.dirName.toLowerCase()==='empty').length,1);
+});
 test('schema migration preserves old moves and stable identities, keeps offline references and independent group layout',()=>{
  const old=config(),before=JSON.stringify(old),next=context.migrateConfiguration(old);
  assert.equal(JSON.stringify(old),before);assert.equal(next.schemaVersion,2);assert.equal(next.customGroups[1].dropPolicy,'move');assert.equal(next.customGroups[1].id,'map');assert.ok(next.launcherReferences[old.launcherIds[0]]);assert.deepEqual(JSON.parse(JSON.stringify(next.panelLayouts['tabs:work'])),old.panelLayouts['zone:zone']);

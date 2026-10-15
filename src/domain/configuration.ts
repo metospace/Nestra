@@ -1,4 +1,4 @@
-import type { PersistedState } from "@/types";
+import type { CustomGroupDefinition, PersistedState } from "@/types";
 import { referenceFromId } from "./sources";
 import type { AppearanceSettings } from "@/types";
 
@@ -10,6 +10,24 @@ export const FROST_APPEARANCE: AppearanceSettings = {
   borderStyle: "subtle",
   panelOpacity: 0.88,
 };
+
+/** A lost configuration must not make existing owned directories disappear.
+ * Stable IDs let independently initialized WebViews adopt the same directory. */
+export function reconcileStorageZones(groups: CustomGroupDefinition[], zones: { dirName: string }[]): CustomGroupDefinition[] {
+  const result = [...groups];
+  const owned = new Set(groups.filter(group => !group.mappedPath && group.sourceKind !== "category").map(group => group.dirName.toLowerCase()));
+  const ids = new Set(groups.map(group => group.id));
+  for (const zone of zones) {
+    const name = zone.dirName.toLowerCase();
+    if (owned.has(name)) continue;
+    const base = `recovered:${encodeURIComponent(name)}`;
+    let id = base;
+    for (let suffix = 2; ids.has(id); suffix++) id = `${base}:${suffix}`;
+    result.push({ id, name: zone.dirName, dirName: zone.dirName, sourceKind: "zone", dropPolicy: "move" });
+    owned.add(name); ids.add(id);
+  }
+  return result;
+}
 
 function object(value: unknown): value is Record<string, any> {
   return !!value && typeof value === "object" && !Array.isArray(value);

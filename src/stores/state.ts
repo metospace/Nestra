@@ -13,7 +13,7 @@ import { inFolder, matchesFilter } from "@/lib/organizer";
 import { containSurface, createDisplayRecoveryGate, recoverSurface } from "@/lib/layout";
 import { rankSearch, runSearch } from "@/lib/search";
 import { sourceFor, referenceFromId } from "@/domain/sources";
-import { FROST_APPEARANCE, migrateConfiguration, prepareRestore } from "@/domain/configuration";
+import { FROST_APPEARANCE, migrateConfiguration, prepareRestore, reconcileStorageZones } from "@/domain/configuration";
 import type { SearchScope, SearchResult } from "@/lib/search";
 import {
   listDisplays,
@@ -394,6 +394,7 @@ export function foldedIds(panelKeyString: string): Set<string> {
 
 export async function initialize(): Promise<void> {
   await restoreState();
+  await recoverStorageZones();
   await syncMappingWatches();
   await refreshDisplays();
   try {
@@ -597,10 +598,28 @@ async function restoreState(): Promise<void> {
     }
     applyPersisted(migrateConfiguration(persisted));
     lastSynced = persisted;
-    if ((persisted.schemaVersion ?? 1) < 2 || !persisted.appearance?.styleVersion) scheduleSave();
+    if ((persisted.schemaVersion ?? 1) < 2 || !persisted.appearance?.styleVersion || !persisted.coexistMigrated) scheduleSave();
   } catch (error) {
     store.persistenceBlocked = true;
     showStatus(`配置未载入，已停止写入以保留原数据：${error}`);
+  }
+}
+
+async function recoverStorageZones(): Promise<void> {
+  try {
+    const zones = await (await import("@/lib/tauri")).listStorageZones();
+    const groups = reconcileStorageZones(store.customGroups, zones);
+    const count = groups.length - store.customGroups.length;
+    if (!count) return;
+    store.customGroups = groups;
+    // A corrupt configuration without a valid backup remains read-only, but
+    // its files can still be displayed from the filesystem's real directories.
+    if (!store.persistenceBlocked) {
+      scheduleSave();
+      showStatus(`已重新关联 ${count} 个收纳目录，文件保持原位`);
+    }
+  } catch {
+    showStatus("收纳目录暂时无法读取，请在控制中心检查数据与恢复");
   }
 }
 
@@ -687,8 +706,7 @@ function applyPersisted(persisted: PersistedState): void {
   store.clipboardEnabled = persisted.clipboardEnabled ?? true;
   store.appearance = { ...DEFAULT_APPEARANCE, ...(persisted.appearance ?? {}) };
   // 旧版本默认接管桌面，老状态文件里 hideNativeIcons 常被写成 true。
-  // 切换到共存模型后复位一次（coexistMigrated 标记位由后端启动时写入；
-  // 这里再兜底一次，防非 Windows 调试路径漏掉）。
+  // 切换到共存模型后复位一次；标记随前端的正常保存链写入。
   store.hideNativeIcons =
     persisted.hideNativeIcons === true && persisted.coexistMigrated === true;
   if (typeof persisted.startWithWindows === "boolean") {
@@ -1130,6 +1148,23 @@ function mergePersisted(
     return out;
   };
 
+  const mergeLayout = (b: PanelLayout | undefined, l: PanelLayout, r: PanelLayout): PanelLayout => {
+    const fields = (layout: PanelLayout | undefined) => layout as unknown as Record<string, unknown> | undefined;
+    const out = mergeMap(fields(b), fields(l), fields(r));
+    // Position, size and monitor recovery form one placement. Appearance,
+    // visibility and item presentation can be edited independently of a drag.
+    const keys = ["x", "y", "width", "height", "monitorId", "monitorBounds", "displacedFrom"] as const;
+    const placement = (layout: PanelLayout | undefined) => Object.fromEntries(
+      keys.filter(key => layout && key in layout).map(key => [key, layout![key]]),
+    );
+    const selected = equivalent(placement(r), placement(b)) ? placement(l) : placement(r);
+    for (const key of keys) {
+      if (key in selected) out[key] = selected[key];
+      else delete out[key];
+    }
+    return out as unknown as PanelLayout;
+  };
+
   const mergeIds = (
     b: string[] | undefined,
     l: string[] | undefined,
@@ -1155,11 +1190,50 @@ function mergePersisted(
   const widgetsR = byId(remote.widgets);
   const widgetsB = byId(base?.widgets);
   const mergedWidgets = mergeMap(widgetsB, widgetsL, widgetsR);
+  for (const id of Object.keys(mergedWidgets)) {
+    const l = widgetsL[id], r = widgetsR[id], b = widgetsB[id];
+    if (!l || !r) continue;
+    const fields = (widget: Widget | undefined) => widget as unknown as Record<string, unknown> | undefined;
+    mergedWidgets[id] = {
+      ...mergeMap(fields(b), fields(l), fields(r)) as unknown as Widget,
+      layout: mergeLayout(b?.layout, l.layout, r.layout),
+    };
+  }
 
   const tabsL = byId(local.tabGroups);
   const tabsR = byId(remote.tabGroups);
   const tabsB = byId(base?.tabGroups);
   const mergedTabs = mergeMap(tabsB, tabsL, tabsR);
+
+  const mergedLayouts = mergeMap(base?.panelLayouts, local.panelLayouts, remote.panelLayouts);
+  for (const key of Object.keys(mergedLayouts)) {
+    const l = local.panelLayouts[key], r = remote.panelLayouts[key];
+    if (l && r) mergedLayouts[key] = mergeLayout(base?.panelLayouts[key], l, r);
+  }
+  const mergedFolded = mergeMap(base?.foldedItems, local.foldedItems, remote.foldedItems);
+  const mergedOrders = mergeMap(base?.itemOrders, local.itemOrders, remote.itemOrders);
+  // Startup may discover a directory while another window is still saving its
+  // newly created source. Keep the saved owner, not a second recovery panel
+  // that applyPersisted would rebind to an invented, nonexistent directory.
+  const aliases = new Map<string, string>();
+  for (const group of Object.values(mergedGroups)) {
+    if (!group.id.startsWith("recovered:") || group.mappedPath || group.sourceKind === "category") continue;
+    const owner = Object.values(mergedGroups).find(other => !other.id.startsWith("recovered:") && !other.mappedPath
+      && other.sourceKind !== "category" && other.dirName?.toLowerCase() === group.dirName?.toLowerCase());
+    if (!owner) continue;
+    aliases.set(group.id, owner.id);
+    delete mergedGroups[group.id];
+    const from = zonePanelKey(group.id), to = zonePanelKey(owner.id);
+    if (!mergedLayouts[to] && mergedLayouts[from]) mergedLayouts[to] = mergedLayouts[from]!;
+    if (!mergedFolded[to] && mergedFolded[from]) mergedFolded[to] = mergedFolded[from]!;
+    if (!mergedOrders[owner.id] && mergedOrders[group.id]) mergedOrders[owner.id] = mergedOrders[group.id]!;
+    delete mergedLayouts[from]; delete mergedFolded[from]; delete mergedOrders[group.id];
+  }
+  for (const [id, tabs] of Object.entries(mergedTabs)) {
+    if (!aliases.size) break;
+    mergedTabs[id] = { ...tabs, groupIds: [...new Set(tabs.groupIds.map(id => aliases.get(id) ?? id))],
+      activeGroupId: aliases.get(tabs.activeGroupId) ?? tabs.activeGroupId };
+  }
 
   // 数组字段保持原顺序：本地顺序优先，远端新增的按原顺序追加。
   const orderBy = <T extends { id: string }>(
@@ -1195,11 +1269,11 @@ function mergePersisted(
     launcherReferences: mergeMap(base?.launcherReferences, local.launcherReferences, remote.launcherReferences),
     launchCollections: orderBy(mergeMap(byId(base?.launchCollections), byId(local.launchCollections), byId(remote.launchCollections)), local.launchCollections, remote.launchCollections),
     clipboardEnabled: pickScalar(base?.clipboardEnabled, local.clipboardEnabled ?? true, remote.clipboardEnabled),
-    panelLayouts: mergeMap(base?.panelLayouts, local.panelLayouts, remote.panelLayouts),
+    panelLayouts: mergedLayouts,
     customGroups: orderBy(mergedGroups, local.customGroups, remote.customGroups),
     tabGroups: orderBy(mergedTabs, local.tabGroups, remote.tabGroups),
-    foldedItems: mergeMap(base?.foldedItems, local.foldedItems, remote.foldedItems),
-    itemOrders: mergeMap(base?.itemOrders, local.itemOrders, remote.itemOrders),
+    foldedItems: mergedFolded,
+    itemOrders: mergedOrders,
     widgets: orderBy(mergedWidgets, local.widgets, remote.widgets),
     appearance: pickScalar(base?.appearance, local.appearance, remote.appearance),
     launcherIds: mergeIds(base?.launcherIds, local.launcherIds, remote.launcherIds),

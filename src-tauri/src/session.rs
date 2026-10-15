@@ -42,41 +42,18 @@ pub fn set_hide_native_icons(hide: bool) {
 /// 否则用户即使关掉了"隐藏图标"，每次启动也会先藏后还原，图标闪一下。
 ///
 /// 迁移：旧版默认接管模式，老状态文件里 hideNativeIcons 常被写成 true。
-/// 切到共存模型后复位一次（coexistMigrated 标记位），避免升级后
-/// "桌面没有图标"。
+/// 切到共存模型后复位一次（标记通过前端保存链写入），避免升级后
+/// "桌面没有图标"。配置损坏时恢复由本应用隐藏的图标。
 pub fn apply_takeover(app: &AppHandle) {
-    if let Some(file) = paths::state_file(app) {
-        if let Ok(text) = std::fs::read_to_string(&file) {
-            if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&text) {
-                let migrated = value
-                    .get("coexistMigrated")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                if !migrated {
-                    if let Some(map) = value.as_object_mut() {
-                        map.insert("hideNativeIcons".into(), serde_json::Value::Bool(false));
-                        map.insert("coexistMigrated".into(), serde_json::Value::Bool(true));
-                        if let Ok(out) = serde_json::to_string_pretty(&value) {
-                            let tmp = file.with_extension("json.tmp");
-                            if std::fs::write(&tmp, out).is_ok() {
-                                let _ = std::fs::rename(&tmp, &file);
-                            }
-                        }
-                    }
-                }
-                let hide = value
-                    .get("hideNativeIcons")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                HIDE_NATIVE.store(hide, Ordering::SeqCst);
-            }
-        }
-    }
-    if is_paused() || !hide_native_enabled() {
-        return;
-    }
+    // Migration is persisted by the frontend's normal save chain. Startup and
+    // the Explorer watchdog must never race save_state using a shared temp file.
+    let hide = paths::state_file(app).and_then(|file| crate::persistence::load(&file).ok())
+        .is_some_and(|value| value["hideNativeIcons"] == true && value["coexistMigrated"] == true
+            && value["schemaVersion"].as_u64().unwrap_or(1) <= 2);
+    HIDE_NATIVE.store(hide, Ordering::SeqCst);
     #[cfg(windows)]
-    explorer::hide_icons();
+    if hide && !is_paused() { explorer::hide_icons(); }
+    else { explorer::restore_icons(); }
 }
 
 pub fn set_paused(app: &AppHandle, paused: bool) {

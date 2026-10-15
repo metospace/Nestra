@@ -5,7 +5,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import Button from "@/ui/Button.vue";
 import { itemDrag, type DragAction } from "@/composables/useItemDrag";
-import { grantDesktopInput, releaseDesktopInput } from "@/lib/tauri";
+import { grantDesktopInput, releaseDesktopInput, showManager } from "@/lib/tauri";
 import DesktopSearch from './DesktopSearch.vue';
 import ConfirmDialog from "./ConfirmDialog.vue";
 import SurfaceSettings from "./SurfaceSettings.vue";
@@ -242,7 +242,7 @@ onBeforeUnmount(() => {
 
     <Transition name="fade">
       <div
-        v-if="store.ready && store.customGroups.length === 0"
+        v-if="store.ready && store.customGroups.length === 0 && !store.persistenceBlocked"
         class="desktop-welcome nestra-hit"
       >
         <p class="text-[15px]">从一个收纳区开始</p>
@@ -252,5 +252,12 @@ onBeforeUnmount(() => {
         <Button class="mt-4" label="新建收纳区" size="small" :loading="creatingZone" @click="createZone" />
       </div>
     </Transition>
+    <div v-if="store.ready && store.persistenceBlocked" class="desktop-welcome nestra-hit" role="alert">
+      <p class="text-[15px]">配置暂时无法读取</p>
+      <p class="mt-2 text-xs" style="color: var(--nestra-text-secondary)">
+        已停止保存以保护原数据。收纳文件仍保存在桌面的 .nestra 目录中。
+      </p>
+      <Button class="mt-4" label="打开数据与恢复" size="small" @click="showManager('data')" />
+    </div>
   </div>
 </template>
