@@ -83,12 +83,17 @@ src-tauri/      Rust 后端
 ```powershell
 pnpm install          # 安装前端依赖
 pnpm tauri dev        # 开发模式（Vite HMR + Rust 增量编译）
-pnpm tauri build      # 发布构建（NSIS 安装包）
+pnpm build:app        # 发布构建（内置前端资源 + NSIS 安装包）
+pnpm build:app:portable # 发布构建（内置前端资源，仅生成 exe）
 pnpm build            # 仅前端类型检查 + 打包
 cargo check           # 仅检查 Rust（在 src-tauri/ 下）
 node --test tests/*.test.mjs # 前端行为回归（项目根目录）
 cargo test --lib       # Rust 文件操作及原生命中区域测试（src-tauri/ 下）
 ```
+
+发布程序必须通过 Tauri CLI 构建。单独运行 `cargo build --release` 仍会使用
+`devUrl`，没有开发服务时会显示 localhost 拒绝连接；构建脚本会阻止这种发布。
+验收发布程序时关闭 Vite 服务，确认控制中心、桌面层和搜索窗口仍能正常加载。
 
 ## Notes
 
