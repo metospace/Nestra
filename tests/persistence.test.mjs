@@ -7,7 +7,7 @@ import { test } from "node:test";
 // Exercise the production persistence functions without starting a desktop window.
 const source = readFileSync(new URL("../src/stores/state.ts", import.meta.url), "utf8");
 const ast = ts.createSourceFile("state.ts", source, ts.ScriptTarget.Latest, true);
-const names = new Set(["snapshotFromStore", "mergePersisted", "applyPersisted", "zonePanelKey"]);
+const names = new Set(["equivalent", "snapshotFromStore", "mergePersisted", "applyPersisted", "zonePanelKey"]);
 const functions = ast.statements.filter(node => ts.isFunctionDeclaration(node) && names.has(node.name?.text));
 assert.equal(functions.length, names.size);
 const code = ts.transpile(functions.map(node => node.getText(ast)).join("\n"), { target: ts.ScriptTarget.ES2022 });

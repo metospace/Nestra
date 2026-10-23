@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import DesktopLayer from "@/desktop/DesktopLayer.vue";
-import ManagerApp from "@/manager/ManagerApp.vue";
+import { defineAsyncComponent } from "vue";
 import UApp from "@nuxt/ui/components/App.vue";
-import SearchWindow from "@/features/SearchWindow.vue";
 import FileMoveResults from '@/components/FileMoveResults.vue';
 
 const label = getCurrentWebviewWindow().label;
+const DesktopLayer = defineAsyncComponent(() => import("@/desktop/DesktopLayer.vue"));
+const ManagerApp = defineAsyncComponent(() => import("@/manager/ManagerApp.vue"));
+const SearchWindow = defineAsyncComponent(() => import("@/features/SearchWindow.vue"));
 </script>
 
 <template>

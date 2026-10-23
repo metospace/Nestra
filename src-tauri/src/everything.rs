@@ -5,7 +5,7 @@
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use serde::Serialize;
-use windows::core::w;
+use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -92,11 +92,14 @@ unsafe extern "system" fn receiver_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
 }
 
 fn find_provider() -> Option<HWND> {
-    unsafe {
-        // Default 1.4/1.5 instance, plus the older 1.5 alpha default instance.
-        [w!("EVERYTHING"), w!("EVERYTHING_(1.5a)")].into_iter()
-            .find_map(|class| FindWindowW(class, None).ok().filter(|hwnd| !hwnd.0.is_null()))
-    }
+    find_provider_with(|class| unsafe { FindWindowW(class, None).ok() })
+}
+
+fn find_provider_with(mut lookup: impl FnMut(PCWSTR) -> Option<HWND>) -> Option<HWND> {
+    // Everything_IPC.h: EVERYTHING is the search UI, not the IPC endpoint.
+    // The notification window remains available when the search UI is closed.
+    [w!("EVERYTHING_TASKBAR_NOTIFICATION"), w!("EVERYTHING_TASKBAR_NOTIFICATION_(1.5a)")]
+        .into_iter().find_map(|class| lookup(class).filter(|hwnd| !hwnd.0.is_null()))
 }
 
 fn query_index(sender: HWND, query: &str, limit: usize) -> Result<Reply, String> {
@@ -138,10 +141,14 @@ fn query_index(sender: HWND, query: &str, limit: usize) -> Result<Reply, String>
 }
 
 pub fn search(query: &str, limit: usize) -> SearchResponse {
+    search_with_provider(find_provider(), query, limit)
+}
+
+fn search_with_provider(sender: Option<HWND>, query: &str, limit: usize) -> SearchResponse {
     let failed = |message: &str| SearchResponse {
         available: false, message: message.into(), total: 0, entries: Vec::new(),
     };
-    let Some(sender) = find_provider() else { return failed("Everything 未运行"); };
+    let Some(sender) = sender else { return failed("Everything 未运行"); };
     let query = query.trim();
     if query.encode_utf16().count() > 1024 || query.contains('\0') { return failed("搜索条件过长或含无效字符"); }
     if query.is_empty() { return SearchResponse {
@@ -249,6 +256,35 @@ mod tests {
         assert_eq!(reply.items[0].path, "E:\\离线资料\\报告.pdf");
     }
     #[test]
+    fn discovers_background_provider_and_queries_both_default_instances() {
+        // Use real hidden top-level windows with the SDK's classes. Restrict
+        // lookup by title so this test never queries the user's Everything.
+        for name in ["EVERYTHING_TASKBAR_NOTIFICATION", "EVERYTHING_TASKBAR_NOTIFICATION_(1.5a)"] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let thread = std::thread::spawn(move || unsafe {
+                let class = windows::core::HSTRING::from(name);
+                let title = w!("Nestra isolated discovery test");
+                let atom = RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(fake_provider),
+                    lpszClassName: PCWSTR(class.as_ptr()), ..Default::default() });
+                assert_ne!(atom, 0);
+                let hwnd = CreateWindowExW(WINDOW_EX_STYLE(0), PCWSTR(class.as_ptr()), title,
+                    WINDOW_STYLE(0), 0, 0, 0, 0, None, None, None, Some(1usize as _)).unwrap();
+                tx.send(hwnd.0 as usize).unwrap();
+                let mut msg = MSG::default();
+                while GetMessageW(&mut msg, None, 0, 0).as_bool() { DispatchMessageW(&msg); }
+                let _ = UnregisterClassW(PCWSTR(class.as_ptr()), None);
+            });
+            let server = FakeProvider { hwnd: rx.recv().unwrap(), thread: Some(thread) };
+            let discovered = find_provider_with(|class| unsafe {
+                FindWindowW(class, w!("Nestra isolated discovery test")).ok()
+            }).expect("notification-only provider should be found");
+            assert_eq!(discovered.0 as usize, server.hwnd);
+            assert!(!unsafe { IsWindowVisible(discovered) }.as_bool());
+            let reply = query_index(discovered, "报告 ext:pdf", 80).unwrap();
+            assert_eq!(reply.items[0].path, "E:\\离线资料\\报告.pdf");
+        }
+    }
+    #[test]
     fn accepted_query_without_reply_times_out_and_cleans_up() {
         let server = start_fake(false);
         let start = Instant::now();
@@ -257,11 +293,11 @@ mod tests {
     }
     #[test]
     fn provider_absence_is_explicit() {
-        if find_provider().is_none() {
-            let result = search("报告", 80);
-            assert!(!result.available);
-            assert_eq!(result.message, "Everything 未运行");
-            assert!(result.entries.is_empty());
-        }
+        // Deterministic even when Everything is running or another test has
+        // temporarily registered an SDK-class fake provider on this desktop.
+        let result = search_with_provider(find_provider_with(|_| None), "报告", 80);
+        assert!(!result.available);
+        assert_eq!(result.message, "Everything 未运行");
+        assert!(result.entries.is_empty());
     }
 }

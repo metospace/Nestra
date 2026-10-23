@@ -81,6 +81,11 @@ pub fn execute(request: &Request, timeout: Duration) -> Result<Value, String> {
         .arg(WORKER_ARG).creation_flags(0x08000000)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
         .spawn().map_err(|e| e.to_string())?;
+    // Register before sending the request: the worker cannot activate its menu
+    // before the desktop layer knows its identity. RAII removes it on every
+    // input failure, timeout, crash and successful completion.
+    let _menu_process = matches!(request, Request::Menu { .. })
+        .then(|| crate::win32::track_shell_menu_process(child.id()));
     // Transfer our foreground permission to the dialog/menu owner process.
     unsafe { let _ = windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(child.id()); }
     let input = (|| -> Result<(), String> {

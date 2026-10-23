@@ -284,8 +284,12 @@ pub async fn save_state(app: AppHandle, state: Value, origin: Option<String>, ex
 
 #[tauri::command]
 pub fn quit_app(app: AppHandle) {
-    crate::session::prepare_exit();
-    app.exit(0);
+    crate::shutdown::request_exit(&app);
+}
+
+#[tauri::command]
+pub fn acknowledge_exit(window: tauri::WebviewWindow, request_id: u64, error: Option<String>) {
+    crate::shutdown::acknowledge(window.label(), request_id, error);
 }
 
 #[tauri::command]
@@ -422,10 +426,11 @@ pub fn move_to_desktop(path: String) -> Result<String, String> {
 
 /// 删除收纳区：目录里的文件全部放回桌面顶层。
 #[tauri::command]
-pub fn dissolve_zone(zone_dir: String) -> Result<u32, String> {
+pub async fn dissolve_zone(zone_dir: String) -> Result<crate::files::DissolveResult, String> {
     #[cfg(windows)]
     {
-        crate::files::dissolve_zone(&zone_dir)
+        tauri::async_runtime::spawn_blocking(move || crate::files::dissolve_zone(&zone_dir))
+            .await.map_err(|error| error.to_string())?
     }
     #[cfg(not(windows))]
     {
@@ -468,9 +473,20 @@ pub async fn grant_desktop_input(app: AppHandle) -> Result<(), String> {
 
 /// 输入完成后归还键盘焦点（搜索/重命名关闭、输入框失焦时调用）。
 #[tauri::command]
-pub fn release_desktop_input() {
+pub async fn release_desktop_input(app: AppHandle) -> Result<(), String> {
     #[cfg(windows)]
-    crate::win32::release_keyboard_focus();
+    {
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        app.run_on_main_thread(move || {
+            crate::win32::release_keyboard_focus_on_window_thread();
+            let _ = send.send(());
+        }).map_err(|error| error.to_string())?;
+        tauri::async_runtime::spawn_blocking(move ||
+            receive.recv_timeout(std::time::Duration::from_secs(2)).map_err(|error| error.to_string())
+        ).await.map_err(|error| error.to_string())?
+    }
+    #[cfg(not(windows))]
+    { let _ = app; Ok(()) }
 }
 
 #[tauri::command]

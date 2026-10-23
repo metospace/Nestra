@@ -11,7 +11,7 @@ const code = ts.transpile(fn.getText(ast).replace(/^export /, ""), { target: ts.
 function setup() {
   const moves = [], messages = [], migrations = [];
   const store = { customGroups: [{id: "zone", dirName: "Documents", name: "Documents"}], entries: [{id: "old", path: "C:/Desktop/test.lnk", target: "C:/Program Files/App/app.exe"}], launcherIds: [], launcherReferences: {} };
-  const context = vm.createContext({ store, ...loadMoveReports(),
+  const context = vm.createContext({runStateMutation: fn => fn(), isExitFrozen: () => false,  store, ...loadMoveReports(),
     performFileChange: fn => fn(),
     moveToZone: async (path, dir) => { moves.push({path, dir}); return "C:/Desktop/.nestra/Documents/test.lnk"; },
     remappedId: (_entry, path) => `new:${path}`,

@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import { loadMoveReports } from './helpers/move-reports.mjs';
 const source=readFileSync('src/domain/presentation.ts','utf8');
-const c=vm.createContext({});vm.runInContext(ts.transpile(source.replace(/^import .*$/gm,'').replace(/^export /gm,''),{target:ts.ScriptTarget.ES2022}),c);
+const c=vm.createContext({runStateMutation: fn => fn(), isExitFrozen: () => false, });vm.runInContext(ts.transpile(source.replace(/^import .*$/gm,'').replace(/^export /gm,''),{target:ts.ScriptTarget.ES2022}),c);
 const global={surfaceMaterial:'glass',cornerStyle:'rounded',borderStyle:'subtle',panelOpacity:.9};
 test('surface overrides inherit unspecified global fields without mutating global appearance',()=>{
  const layout={appearance:{panelOpacity:.65,backgroundColor:'#edf4ff'},iconSize:54,labelLines:3,itemGap:12};
@@ -22,7 +22,7 @@ test('reset to global appearance retains layout presentation and follows later g
 });
 const storeSource=readFileSync('src/stores/state.ts','utf8'),ast=ts.createSourceFile('state.ts',storeSource,ts.ScriptTarget.Latest,true);
 const selectionCode=ts.transpile(ast.statements.filter(n=>ts.isFunctionDeclaration(n)&&['selectPanelItems','selectItem','setPanelPresentation','setSurfaceAppearance','batchMoveItems','useGlobalAppearanceForAll','clearSurfaceBackground'].includes(n.name?.text)).map(n=>n.getText(ast).replace(/^export /,'')).join('\n'),{target:ts.ScriptTarget.ES2022});
-function setup(){const c=vm.createContext({store:{selectedItemIds:[],selectionPanel:'',selectionAnchor:'',panelLayouts:{a:{},b:{}},widgets:[]},updateLayout:(key,patch)=>Object.assign(c.store.panelLayouts[key],patch),scheduleSave(){},showStatus(){}});vm.runInContext(selectionCode,c);return c;}
+function setup(){const c=vm.createContext({runStateMutation: fn => fn(), isExitFrozen: () => false, store:{selectedItemIds:[],selectionPanel:'',selectionAnchor:'',panelLayouts:{a:{},b:{}},widgets:[]},updateLayout:(key,patch)=>Object.assign(c.store.panelLayouts[key],patch),scheduleSave(){},showStatus(){}});vm.runInContext(selectionCode,c);return c;}
 test('Ctrl selection toggles and Shift selection respects the active source order',()=>{const c=setup(),order=['a','b','c','d'];c.selectItem('b','one',order,false,false);c.selectItem('d','one',order,false,true);assert.deepEqual(Array.from(c.store.selectedItemIds),['b','c','d']);c.selectItem('c','one',order,true,false);assert.deepEqual(Array.from(c.store.selectedItemIds),['b','d']);c.selectItem('a','two',order,true,true);assert.deepEqual(Array.from(c.store.selectedItemIds),['a']);});
 test('one surface style never changes another surface; reset removes the override',()=>{const c=setup();c.setSurfaceAppearance('a',{panelOpacity:.5});assert.equal(c.store.panelLayouts.a.appearance.panelOpacity,.5);assert.equal(c.store.panelLayouts.b.appearance,undefined);c.setSurfaceAppearance('a',null);assert.equal(c.store.panelLayouts.a.appearance,undefined);});
 test('presentation inputs are clamped to supported integer ranges',()=>{const c=setup();c.setPanelPresentation('a',{columns:100,iconSize:10,itemGap:40,labelLines:5});assert.deepEqual(JSON.parse(JSON.stringify(c.store.panelLayouts.a)),{columns:8,iconSize:24,itemGap:24,labelLines:3});});

@@ -130,35 +130,113 @@ pub fn read_clipboard_text() -> Option<String> {
     }
 }
 
+/// Prepared before EmptyClipboard: allocation/locking failures must not erase
+/// the user's existing clipboard. Own the allocation until Windows accepts it.
+struct ClipboardText(windows::Win32::Foundation::HGLOBAL);
+
+impl ClipboardText {
+    fn new(text: &str) -> Option<Self> {
+        use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+        let wide: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+        let bytes = wide.len().checked_mul(std::mem::size_of::<u16>())?;
+        unsafe {
+            let data = Self(GlobalAlloc(GMEM_MOVEABLE, bytes).ok()?);
+            let destination = GlobalLock(data.0);
+            if destination.is_null() { return None; }
+            std::ptr::copy_nonoverlapping(wide.as_ptr(), destination.cast::<u16>(), wide.len());
+            let _ = GlobalUnlock(data.0);
+            Some(data)
+        }
+    }
+}
+
+impl Drop for ClipboardText {
+    fn drop(&mut self) {
+        if !self.0.0.is_null() {
+            unsafe { let _ = windows::Win32::Foundation::GlobalFree(Some(self.0)); }
+        }
+    }
+}
+
+/// A message-only window owned by this calling thread; no Tauri window calls or
+/// UI-thread dispatch are needed. NULL owner + EmptyClipboard rejects writes.
+struct ClipboardOwner(windows::Win32::Foundation::HWND);
+
+impl ClipboardOwner {
+    fn new() -> Option<Self> {
+        use windows::core::w;
+        use windows::Win32::UI::WindowsAndMessaging::*;
+        unsafe {
+            CreateWindowExW(WINDOW_EX_STYLE(0), w!("STATIC"), w!("Nestra Clipboard"),
+                WINDOW_STYLE(0), 0, 0, 0, 0, Some(HWND_MESSAGE), None, None, None).ok().map(Self)
+        }
+    }
+}
+
+impl Drop for ClipboardOwner {
+    fn drop(&mut self) {
+        unsafe { let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(self.0); }
+    }
+}
+
+struct OpenedClipboard;
+impl Drop for OpenedClipboard {
+    fn drop(&mut self) {
+        unsafe { let _ = windows::Win32::System::DataExchange::CloseClipboard(); }
+    }
+}
+
 /// 把文本写入剪贴板（覆盖现有内容）。
 pub fn write_clipboard_text(text: &str) -> Option<()> {
     use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::System::DataExchange::{
-        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
-    };
-    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    use windows::Win32::System::DataExchange::{EmptyClipboard, OpenClipboard, SetClipboardData};
 
-    let mut wide: Vec<u16> = text.encode_utf16().collect();
-    wide.push(0);
-
+    let mut data = ClipboardText::new(text)?;
+    let owner = ClipboardOwner::new()?;
     unsafe {
-        OpenClipboard(None).ok()?;
-        let result = (|| {
-            EmptyClipboard().ok()?;
-            let handle = GlobalAlloc(GMEM_MOVEABLE, wide.len() * 2).ok()?;
-            let destination = GlobalLock(handle);
-            if destination.is_null() {
-                return None;
-            }
-            std::ptr::copy_nonoverlapping(wide.as_ptr(), destination.cast::<u16>(), wide.len());
-            let _ = GlobalUnlock(handle);
+        OpenClipboard(Some(owner.0)).ok()?;
+        // Drop order closes the clipboard before destroying its owner HWND.
+        let _opened = OpenedClipboard;
+        EmptyClipboard().ok()?;
+        SetClipboardData(CF_UNICODETEXT, Some(HANDLE(data.0.0))).ok()?;
+        data.0 = Default::default(); // Windows owns the allocation after success.
+    }
+    Some(())
+}
 
-            // 所有权移交剪贴板；成功后不再 GlobalFree。
-            SetClipboardData(CF_UNICODETEXT, Some(HANDLE(handle.0))).ok()?;
-            Some(())
-        })();
-        CloseClipboard().ok();
-        result
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prepares_unicode_memory_without_opening_or_changing_clipboard() {
+        use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+        for text in ["", "报告 📋\nsecond line"] {
+            let data = ClipboardText::new(text).unwrap();
+            let expected: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+            unsafe {
+                let pointer = GlobalLock(data.0).cast::<u16>();
+                assert!(!pointer.is_null());
+                assert_eq!(std::slice::from_raw_parts(pointer, expected.len()), expected.as_slice());
+                let _ = GlobalUnlock(data.0);
+            }
+            // Drop also exercises freeing an allocation not handed to Windows.
+        }
+    }
+
+    #[test]
+    fn temporary_owner_is_hidden_and_destroyed_on_its_own_thread() {
+        use windows::Win32::System::Threading::GetCurrentThreadId;
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, IsWindow, IsWindowVisible};
+        let owner = ClipboardOwner::new().unwrap();
+        let hwnd = owner.0;
+        unsafe {
+            assert!(IsWindow(Some(hwnd)).as_bool());
+            assert!(!IsWindowVisible(hwnd).as_bool());
+            assert_eq!(GetWindowThreadProcessId(hwnd, None), GetCurrentThreadId());
+        }
+        drop(owner);
+        assert!(!unsafe { IsWindow(Some(hwnd)) }.as_bool());
     }
 }
 

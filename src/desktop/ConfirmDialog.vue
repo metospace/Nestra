@@ -1,5 +1,13 @@
 <script setup lang="ts">
 import { store } from "@/stores/state";
+import { nextTick, ref, watch } from "vue";
+
+const cancelButton = ref<HTMLButtonElement | null>(null);
+watch(() => store.confirmRequest, async (request) => {
+  if (!request) return;
+  await nextTick();
+  if (store.confirmRequest === request) cancelButton.value?.focus({ preventScroll: true });
+});
 
 function answer(ok: boolean): void {
   store.confirmRequest?.resolve(ok);
@@ -14,11 +22,11 @@ function answer(ok: boolean): void {
     @click.self="answer(false)"
     @contextmenu.prevent
   >
-    <div class="confirm-card" role="alertdialog">
+    <div class="confirm-card" role="alertdialog" @keydown.esc.prevent="answer(false)">
       <p class="confirm-message">{{ store.confirmRequest.message }}</p>
       <div class="confirm-actions">
-        <button type="button" class="menu-row confirm-btn" @click="answer(false)">取消</button>
-        <button type="button" class="menu-row confirm-btn confirm-ok" @click="answer(true)">确定</button>
+        <button ref="cancelButton" data-desktop-input type="button" class="menu-row confirm-btn" @click="answer(false)">取消</button>
+        <button data-desktop-input type="button" class="menu-row confirm-btn confirm-ok" @click="answer(true)">确定</button>
       </div>
     </div>
   </div>

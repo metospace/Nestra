@@ -109,3 +109,153 @@ test('display recovery waits for stable enumeration and resets after wake-up fai
  assert.equal(ready([display,other],4500),false);assert.equal(ready([display,other],5000),false);assert.equal(ready([other,display],6500),true);
  assert.equal(ready([],7000),false);assert.equal(ready([display],8000),false);assert.equal(ready([display],12000),false);assert.equal(ready([display],13000),true);
 });
+
+function intersects(a, b) {
+  return a.x < b.x + b.width && a.x + a.width > b.x
+    && a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
+function assertContained(layouts, screens) {
+  for (const layout of layouts) {
+    assert.ok(screens.some(d => layout.x >= d.x && layout.y >= d.y
+      && layout.x + layout.width <= d.x + d.width && layout.y + layout.height <= d.y + d.height));
+  }
+}
+
+function assertNoOverlap(layouts) {
+  for (let i = 0; i < layouts.length; i++) {
+    for (let j = i + 1; j < layouts.length; j++) assert.equal(intersects(layouts[i], layouts[j]), false);
+  }
+}
+
+function assertOriginalsRestored(layouts, originals) {
+  for (const [i, layout] of layouts.entries()) {
+    for (const key of ['x', 'y', 'width', 'height', 'monitorId']) assert.equal(layout[key], originals[i][key]);
+    assert.equal(layout.displacedFrom, undefined);
+  }
+}
+
+test('batch resolution recovery separates panels, survives restart and restores original sizes', () => {
+  const large = { ...display, width: 1920, height: 1080 };
+  const small = { ...large, width: 1024, height: 600 };
+  const originals = [1100, 1450].map(x => ({ x, y: 100, width: 336, height: 600, monitorId: large.id, zIndex: 1, visible: true }));
+  const layouts = structuredClone(originals);
+  assert.equal(context.recoverSurfaces(layouts, [small]), true);
+  assertNoOverlap(layouts); assertContained(layouts, [small]);
+  assert.equal(context.recoverSurfaces(layouts, [small]), false);
+  const restarted = JSON.parse(JSON.stringify(layouts));
+  assert.equal(context.recoverSurfaces(restarted, [small]), false);
+  for (const [i, layout] of restarted.entries()) {
+    assert.equal(layout.displacedFrom.x, originals[i].x);
+    assert.equal(layout.displacedFrom.height, 600);
+  }
+  context.recoverSurfaces(restarted, [large]);
+  assertOriginalsRestored(restarted, originals);
+});
+
+test('missing display recovery avoids healthy panels and widgets and returns when display reconnects', () => {
+  const other = { ...display, id: 'external', x: 1536, isPrimary: false };
+  const healthy = { x: 18, y: 64, width: 336, height: 432, monitorId: display.id, visible: true, zIndex: 3 };
+  const originals = [1600, 2000, 2400].map(x => ({ x, y: 100, width: 336, height: 432,
+    monitorId: other.id, monitorBounds: { x: other.x, y: other.y }, visible: true, zIndex: 1 }));
+  const layouts = [structuredClone(healthy), ...structuredClone(originals)];
+  context.recoverSurfaces(layouts, [display]);
+  assert.deepEqual(layouts[0], healthy); assertNoOverlap(layouts); assertContained(layouts, [display]);
+  const restarted = JSON.parse(JSON.stringify(layouts));
+  assert.equal(context.recoverSurfaces(restarted, [display]), false);
+  context.recoverSurfaces(restarted, [display, other]);
+  assertOriginalsRestored(restarted.slice(1), originals);
+});
+
+test('crowded recovery cascades exposed headers without permanently shrinking originals', () => {
+  const small = { ...display, width: 500, height: 320 };
+  const other = { ...display, id: 'external', x: 1536, width: 3000, isPrimary: false };
+  const originals = [1700, 2200, 2700, 3200].map(x => ({ x, y: 50, width: 400, height: 300,
+    monitorId: other.id, visible: true, zIndex: 1 }));
+  const layouts = structuredClone(originals);
+  context.recoverSurfaces(layouts, [small]);
+  assertContained(layouts, [small]);
+  assert.equal(new Set(layouts.map(l => `${l.x},${l.y}`)).size, layouts.length);
+  for (const layout of layouts) for (const higher of layouts.filter(l => l.zIndex > layout.zIndex)) {
+    assert.equal(intersects({ ...layout, height: 36 }, higher), false, 'a higher recovered surface must not cover another header');
+  }
+  const restarted = JSON.parse(JSON.stringify(layouts));
+  assert.equal(context.recoverSurfaces(restarted, [small]), false);
+  context.recoverSurfaces(restarted, [display, other]);
+  assertOriginalsRestored(restarted, originals);
+});
+
+test('batch preserves intentional overlap and hidden state of healthy surfaces', () => {
+  const fixed = [
+    { x: 18, y: 64, width: 336, height: 432, visible: true },
+    { x: 60, y: 100, width: 336, height: 432, visible: true },
+    { x: 400, y: 64, width: 336, height: 432, visible: false },
+  ];
+  const incoming = { x: 2000, y: 80, width: 336, height: 432, monitorId: 'offline', visible: true };
+  const layouts = [...structuredClone(fixed), incoming];
+  context.recoverSurfaces(layouts, [display]);
+  assert.deepEqual(layouts.slice(0, 3), fixed);
+  for (const other of layouts.slice(0, 2)) assert.equal(intersects(incoming, other), false);
+  assert.equal(context.recoverSurfaces(layouts, [display]), false);
+});
+
+test('recovery uses a spare monitor before cascading over a full primary screen', () => {
+  const primary = { ...display, width: 500, height: 400 };
+  const spare = { ...primary, id: 'spare', x: -600, y: -200, isPrimary: false };
+  const healthy = { x: 0, y: 0, width: 500, height: 400, monitorId: primary.id, visible: true, zIndex: 4 };
+  const incoming = { x: 2000, y: 80, width: 336, height: 300, monitorId: 'offline', visible: true, zIndex: 2 };
+  const layouts = [structuredClone(healthy), incoming];
+  context.recoverSurfaces(layouts, [spare, primary]);
+  assert.deepEqual(layouts[0], healthy); assert.equal(incoming.monitorId, spare.id);
+  assertNoOverlap(layouts); assertContained(layouts, [primary, spare]);
+  assert.equal(context.recoverSurfaces(layouts, [primary, spare]), false);
+});
+
+test('temporary recovery follows virtual origin changes without losing external monitor coordinates', () => {
+  const other = { ...display, id: 'external', x: 1536, isPrimary: false };
+  const original = { x: 2000, y: 80, width: 336, height: 400, monitorId: other.id, monitorBounds: { x: 1536, y: 0 }, visible: true };
+  const layout = structuredClone(original);
+  context.recoverSurfaces([layout], [display]);
+  assert.equal(context.recoverSurfaces([layout], [display]), false);
+  const shifted = { ...display, x: -1536 };
+  context.recoverSurfaces([layout], [shifted]);
+  assertContained([layout], [shifted]);
+  assert.equal(context.recoverSurfaces([layout], [shifted]), false);
+  context.recoverSurfaces([layout], [display, other]);
+  assertOriginalsRestored([layout], [original]);
+});
+
+test('recovery order is independent of layout enumeration and ignores invalid monitor snapshots', () => {
+  const originals = [2000, 2400, 2800].map(x => ({ x, y: 80, width: 336, height: 400,
+    monitorId: 'offline', visible: true }));
+  const first = structuredClone(originals), second = structuredClone(originals).reverse();
+  assert.equal(context.recoverSurfaces(first, []), false);
+  assert.equal(context.recoverSurfaces(first, [{ ...display, width: 0 }]), false);
+  assert.deepEqual(first, originals);
+  context.recoverSurfaces(first, [display]);
+  context.recoverSurfaces(second, [display]);
+  assert.deepEqual(first, second.reverse());
+});
+
+test('severely crowded cascades do not keep shortening or moving after every refresh', () => {
+  for (const width of [400, 500, 800]) {
+    const small = { ...display, width, height: 320 };
+    const layouts = Array.from({ length: 9 }, (_,i) => ({ x: 2000 + i * 450, y: 80,
+      width: 400, height: 500, visible: true, zIndex: i + 1, monitorId: 'offline' }));
+    context.recoverSurfaces(layouts, [small]);
+    assertContained(layouts, [small]);
+    const restarted = JSON.parse(JSON.stringify(layouts));
+    for (let i = 0; i < 3; i++) assert.equal(context.recoverSurfaces(restarted, [small]), false);
+    for (const layout of restarted) assert.equal(layout.displacedFrom.height, 500);
+  }
+});
+
+test('previously saved overlapping fallback positions are separated without losing home placements', () => {
+  const layouts = [2000, 2400].map(x => ({ x: 18, y: 64, width: 336, height: 400,
+    monitorId: display.id, visible: true,
+    displacedFrom: { monitorId: 'offline', x, y: 80, width: 336, height: 400 } }));
+  assert.equal(context.recoverSurfaces(layouts, [display]), true);
+  assertNoOverlap(layouts);
+  assert.equal(layouts[0].displacedFrom.x, 2000); assert.equal(layouts[1].displacedFrom.x, 2400);
+  assert.equal(context.recoverSurfaces(layouts, [display]), false);
+});

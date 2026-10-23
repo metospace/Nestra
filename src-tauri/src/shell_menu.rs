@@ -32,6 +32,11 @@ pub fn show_native(request: &crate::shell_worker::MenuRequest) -> Result<String,
     struct Owner(HWND);
     impl Drop for Owner { fn drop(&mut self) { unsafe { let _ = DestroyWindow(self.0); } } }
     let _owner = Owner(hwnd);
+    unsafe {
+        windows::Win32::UI::WindowsAndMessaging::SetPropW(hwnd, crate::win32::SHELL_MENU_OWNER,
+            Some(windows::Win32::Foundation::HANDLE(1usize as _)))
+            .map_err(|error| format!("无法标记系统菜单窗口：{error}"))?;
+    }
     let crate::shell_worker::MenuRequest { path, x: screen_x, y: screen_y, to_desktop, in_launcher, can_fold, can_rename } = request;
     let (screen_x, screen_y) = (*screen_x, *screen_y);
     let (x, y) = if screen_x == 0 && screen_y == 0 {

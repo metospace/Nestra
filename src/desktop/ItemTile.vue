@@ -2,7 +2,7 @@
 import { sourceFor } from "@/domain/sources";
 import { computed, ref } from "vue";
 import { startItemDrag } from "@/composables/useItemDrag";
-import { launchEntry, releaseDesktopInput, revealEntry, showShellMenu } from "@/lib/tauri";
+import { launchEntry, revealEntry, showShellMenu } from "@/lib/tauri";
 import {
   cachedIconUrl,
   canManageEntry,
@@ -133,8 +133,7 @@ function menuRename(): void {
 
 function closeRename(): void {
   renaming.value = false;
-  // 输入框被卸载不会触发 focusout，显式归还键盘焦点。
-  void releaseDesktopInput();
+  // The desktop input coordinator observes removal and releases the session.
 }
 
 function submitRename(): void {

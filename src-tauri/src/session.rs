@@ -58,6 +58,10 @@ pub fn apply_takeover(app: &AppHandle) {
 
 pub fn set_paused(app: &AppHandle, paused: bool) {
     PAUSED.store(paused, Ordering::SeqCst);
+    // Preserve pause across the brief interval where the watchdog is replacing
+    // the HWND. The new layer reads this flag without rewriting session state.
+    #[cfg(windows)]
+    win32::set_stay_on_desktop(!paused);
     let Some(layer) = app.get_webview_window("desktop") else {
         return;
     };
@@ -65,8 +69,6 @@ pub fn set_paused(app: &AppHandle, paused: bool) {
     if paused {
         #[cfg(windows)]
         win32::release_keyboard_focus();
-        #[cfg(windows)]
-        win32::set_stay_on_desktop(false);
         let _ = layer.hide();
         #[cfg(windows)]
         explorer::restore_icons();
@@ -78,8 +80,6 @@ pub fn set_paused(app: &AppHandle, paused: bool) {
     if hide_native_enabled() {
         explorer::hide_icons();
     }
-    #[cfg(windows)]
-    win32::set_stay_on_desktop(true);
     let _ = layer.show();
     #[cfg(windows)]
     win32::reassert_bottom();

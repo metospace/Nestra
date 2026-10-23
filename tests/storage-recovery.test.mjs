@@ -10,13 +10,13 @@ const configAst=ts.createSourceFile('configuration.ts',readFileSync('src/domain/
 const configCode=configAst.statements.filter(node=>ts.isFunctionDeclaration(node)&&['migrateConfiguration','reconcileStorageZones'].includes(node.name?.text)
   ||ts.isVariableStatement(node)&&node.getText(configAst).includes('FROST_APPEARANCE')).map(node=>node.getText(configAst).replace(/^export /,''));
 const stateCode=ast.statements.filter(node=>ts.isFunctionDeclaration(node)&&['restoreState','recoverStorageZones'].includes(node.name?.text))
-  .map(node=>node.getText(ast).replaceAll('(await import("@/lib/tauri"))','api'));
+  .map(node=>node.getText(ast));
 const code=ts.transpile([...configCode,...stateCode].join('\n'),{target:ts.ScriptTarget.ES2022});
 function setup(load){
  let saves=0;const messages=[];
  const c=vm.createContext({structuredClone,referenceFromId:()=>undefined,lastSynced:null,
   store:{customGroups:[],persistenceBlocked:false},loadPersistedState:load,
-  api:{listStorageZones:async()=>[{dirName:'AI IDE'},{dirName:'开发工具'}],backupConfiguration:async()=>{}},
+  listStorageZones:async()=>[{dirName:'AI IDE'},{dirName:'开发工具'}],backupConfiguration:async()=>{},
   scheduleSave:()=>saves++,showStatus:message=>messages.push(message),
   applyPersisted:state=>Object.assign(c.store,state)});
  vm.runInContext(code,c);return {c,get saves(){return saves},messages};

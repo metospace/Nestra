@@ -18,6 +18,8 @@ async function execute(report: MoveReport, items: MoveResult[]): Promise<void> {
     // Refresh failures are separate: a successful native move must never be retried.
     report.warning = '';
     try { await report.finish(report); } catch (error) { report.warning = `文件列表刷新失败：${error}。已成功的移动无需重试。`; }
+    // Keep successful moves in history without interrupting the desktop workflow.
+    fileMoves.open = report.items.some(item => item.state === 'failed') || Boolean(report.warning);
   } finally { fileMoves.busy = false; }
 }
 export async function trackFileMoves(destination: string, tasks: MoveTask[], finish: (report: MoveReport) => Promise<void>): Promise<MoveReport | undefined> {
@@ -25,7 +27,7 @@ export async function trackFileMoves(destination: string, tasks: MoveTask[], fin
   const report: MoveReport = { id: ++sequence, destination, items: tasks.map(task => ({ ...task, state: 'pending', error: '' })), warning: '', finish };
   fileMoves.reports.push(report);
   fileMoves.activeId = report.id;
-  fileMoves.open = true;
+  fileMoves.open = false;
   const tracked = fileMoves.reports.at(-1)!;
   await execute(tracked, tracked.items);
   return tracked;

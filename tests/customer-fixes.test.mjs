@@ -49,7 +49,7 @@ function launcherTest() {
     panelLayouts: { 'system:launcher': layout }, launcherReferences: {}, launcherIds: [], paused: false,
     displays: [{ id: 'main', x: 0, y: 0, width: 1920, height: 1080, isPrimary: true }],
   };
-  const context = vm.createContext({
+  const context = vm.createContext({runStateMutation: fn => fn(), isExitFrozen: () => false,
     exports: {}, store, statusTimer: undefined, LAUNCHER_PANEL_KEY: 'system:launcher',
     scheduleSave: () => saves++, scheduleHitRectSync: () => hitSyncs++, ensureLauncherLayout() {},
     nextZ: () => ++zIndex,

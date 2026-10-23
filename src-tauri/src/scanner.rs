@@ -102,14 +102,14 @@ fn push_entry(
     let meta = full_path.metadata().ok();
     let is_dir = full_path.is_dir();
 
-    let (target, kind) = if ext == ".lnk" {
+    let (target, kind) = if is_dir {
+        (Some(full_path.to_string_lossy().into_owned()), "folder")
+    } else if ext == ".lnk" {
         (resolve_lnk(&full_path), "shortcut")
     } else if ext == ".url" {
         (resolve_url(&full_path), "url")
     } else if ext == ".appref-ms" {
         (Some(full_path.to_string_lossy().into_owned()), "appref")
-    } else if is_dir {
-        (Some(full_path.to_string_lossy().into_owned()), "folder")
     } else {
         (Some(full_path.to_string_lossy().into_owned()), "file")
     };
@@ -129,8 +129,8 @@ fn push_entry(
         .map(|elapsed| elapsed.as_secs() < 7 * 24 * 3600)
         .unwrap_or(false);
 
-    let is_application = matches!(kind, "shortcut" | "url" | "appref")
-        || matches!(ext.as_str(), ".exe" | ".bat" | ".cmd");
+    let is_application = !is_dir && (matches!(kind, "shortcut" | "url" | "appref")
+        || matches!(ext.as_str(), ".exe" | ".bat" | ".cmd"));
     let display_name = full_path
         .file_stem()
         .map(|value| value.to_string_lossy().into_owned())
@@ -400,6 +400,28 @@ pub fn scan_desktop() -> Vec<DesktopEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn application_suffix_directories_use_the_same_file_identity_as_the_index() {
+        let root = std::env::temp_dir().join(format!("nestra-folder-kind-{}-{}",
+            std::process::id(), chrono::Local::now().timestamp_nanos_opt().unwrap()));
+        std::fs::create_dir(&root).unwrap();
+        struct TestDirectory(PathBuf);
+        impl Drop for TestDirectory { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
+        let _cleanup = TestDirectory(root.clone());
+        for suffix in ["exe", "bat", "cmd", "lnk", "url", "appref-ms"] {
+            std::fs::create_dir(root.join(format!("资料.{suffix}"))).unwrap();
+        }
+        let entries = scan_folder(&root.to_string_lossy()).unwrap();
+        assert_eq!(entries.len(), 6);
+        for entry in entries {
+            assert_eq!(entry.kind, "folder");
+            assert!(!entry.is_application);
+            assert!(entry.id.starts_with("file:"));
+            assert_eq!(entry.target, entry.path);
+            assert_eq!(entry.id, indexed_entry(&entry.path, true).unwrap().id);
+        }
+    }
 
     #[test]
     fn index_results_do_not_require_online_paths_or_resolve_shortcuts() {

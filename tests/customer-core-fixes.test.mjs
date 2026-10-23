@@ -11,7 +11,7 @@ function functions(path,names) {
 }
 test('async result enrichment preserves the latest keyboard selection and expands visible rows',async()=>{
   let callback,partial,finish;
-  const c=vm.createContext({visibleCount:{value:24},results:{value:[]},active:{value:0},message:{value:''},loading:{value:false},query:{value:'a'},scope:{value:'all'},timer:undefined,revision:0,window:{clearTimeout(){},setTimeout:fn=>{callback=fn;return 1;}},searchWithDetails:async(_query,_scope,apply)=>{partial=apply;apply({entries:[{id:'a'},{id:'b'}],message:'local'});return new Promise(resolve=>finish=resolve)}});
+  const c=vm.createContext({runStateMutation: fn => fn(), isExitFrozen: () => false, visibleCount:{value:24},results:{value:[]},active:{value:0},message:{value:''},loading:{value:false},query:{value:'a'},scope:{value:'all'},timer:undefined,revision:0,window:{clearTimeout(){},setTimeout:fn=>{callback=fn;return 1;}},searchWithDetails:async(_query,_scope,apply)=>{partial=apply;apply({entries:[{id:'a'},{id:'b'}],message:'local'});return new Promise(resolve=>finish=resolve)}});
   vm.runInContext(functions('src/features/SearchPanel.vue',['queue']),c);
   c.queue();const pending=callback();c.active.value=1;
   partial({entries:[{id:'c'},{id:'a'},{id:'b'}],message:'partial'});assert.equal(c.active.value,2);
@@ -43,13 +43,13 @@ test('retrying an older report refreshes that report rather than the most recent
 });
 test('single native move remains successful and saves ID migration when the subsequent scan fails',async()=>{
  const moves=[],migrations=[],messages=[];let saves=0;
- const c=vm.createContext({store:{entries:[{id:'old',path:'C:/Desktop/a',name:'A',canManage:true,kind:'file'}],customGroups:[{id:'zone',dirName:'Work',name:'Work'}]},sourceFor:()=>({writable:true}),performFileChange:fn=>fn(),moveToZone:async(path,dir)=>{moves.push([path,dir]);return 'C:/Desktop/.nestra/Work/a'},remappedId:(_entry,path)=>`file:${path}`,migrateItemId:(oldId,newId)=>migrations.push([oldId,newId]),clearFolded(){},scheduleSave:()=>saves++,rescan:async()=>{throw Error('offline scan')},showStatus:message=>messages.push(message)});
+ const c=vm.createContext({runStateMutation: fn => fn(), isExitFrozen: () => false, store:{entries:[{id:'old',path:'C:/Desktop/a',name:'A',canManage:true,kind:'file'}],customGroups:[{id:'zone',dirName:'Work',name:'Work'}]},sourceFor:()=>({writable:true}),performFileChange:fn=>fn(),moveToZone:async(path,dir)=>{moves.push([path,dir]);return 'C:/Desktop/.nestra/Work/a'},remappedId:(_entry,path)=>`file:${path}`,migrateItemId:(oldId,newId)=>migrations.push([oldId,newId]),clearFolded(){},scheduleSave:()=>saves++,rescan:async()=>{throw Error('offline scan')},showStatus:message=>messages.push(message)});
  vm.runInContext(functions('src/stores/state.ts',['moveItem','moveItemOrThrow']),c);
  assert.equal(await c.moveItem('old','zone'),'file:C:/Desktop/.nestra/Work/a');assert.equal(moves.length,1);assert.equal(migrations.length,1);assert.equal(saves,1);assert.match(messages[0],/移动已完成/);
 });
 test('batch return to desktop tracks per-file failure and never repeats a successful return',async()=>{
  const m=loadMoveReports(),calls=[];let occupied=true;
- const c=vm.createContext({...m,store:{entries:['a','b'].map(id=>({id,path:id,name:id,zone:'Zone',canManage:true})),customGroups:[]},performFileChange:fn=>fn(),moveToDesktopNative:async path=>{calls.push(path);if(path==='b'&&occupied)throw Error('locked');return `Desktop/${path}`},remappedId:(_entry,path)=>`file:${path}`,migrateItemId(){},scheduleSave(){},rescan:async()=>{},showStatus(){}});
+ const c=vm.createContext({runStateMutation: fn => fn(), isExitFrozen: () => false, ...m,store:{entries:['a','b'].map(id=>({id,path:id,name:id,zone:'Zone',canManage:true})),customGroups:[]},performFileChange:fn=>fn(),moveToDesktopNative:async path=>{calls.push(path);if(path==='b'&&occupied)throw Error('locked');return `Desktop/${path}`},remappedId:(_entry,path)=>`file:${path}`,migrateItemId(){},scheduleSave(){},rescan:async()=>{},showStatus(){}});
  vm.runInContext(functions('src/stores/state.ts',['batchReturnItems','returnItemOrThrow']),c);
  await c.batchReturnItems(['a','b']);occupied=false;await m.retryFailedMoves();assert.deepEqual(calls,['a','b','b']);assert.ok(m.fileMoves.reports[0].items.every(item=>item.state==='success'));
 });
@@ -61,13 +61,13 @@ test('concurrent batches cannot start while a prior move is pending',async()=>{
 });
 test('failed retries stop when the destination changes or the source disappears',async()=>{
   const m=loadMoveReports();let calls=0;
-  const c=vm.createContext({...m,store:{customGroups:[{id:'target',dirName:'before',name:'Zone'}],entries:[{id:'a',path:'a',name:'A'}]},sourceFor:()=>({writable:true}),moveItemOrThrow:async()=>{calls++;throw Error('locked');},rescan:async()=>{},scheduleSave(){},selectPanelItems(){},showStatus(){}});
+  const c=vm.createContext({runStateMutation: fn => fn(), isExitFrozen: () => false, ...m,store:{customGroups:[{id:'target',dirName:'before',name:'Zone'}],entries:[{id:'a',path:'a',name:'A'}]},sourceFor:()=>({writable:true}),moveItemOrThrow:async()=>{calls++;throw Error('locked');},rescan:async()=>{},scheduleSave(){},selectPanelItems(){},showStatus(){}});
   vm.runInContext(functions('src/stores/state.ts',['batchMoveItems']),c);
   await c.batchMoveItems(['a'],'target');c.store.customGroups[0].dirName='after';await m.retryFailedMoves();assert.equal(calls,1);assert.match(m.fileMoves.reports[0].items[0].error,/目标目录已改变/);
   c.store.customGroups[0].dirName='before';c.store.entries=[];await m.retryFailedMoves();assert.equal(calls,1);assert.match(m.fileMoves.reports[0].items[0].error,/源文件已改变/);
 });
 function viewTest(){const calls=[];const layout={x:450,y:250,width:336,height:432,locked:true,visible:false,zIndex:5,monitorId:'main'};
- const c=vm.createContext({fileMoves:{busy:false},desktopGestureActive:()=>false,store:{paused:true,displays:[{id:'main',x:0,y:0,width:1920,height:1080,isPrimary:true}]},layoutFor:()=>layout,nextZ:()=>20,scheduleHitRectSync(){},flushState:async()=>calls.push('save'),setPausedNative:async()=>calls.push('resume'),getCurrentWebviewWindow:()=>({hide:async()=>calls.push('hide')}),showStatus:message=>calls.push(message)});
+ const c=vm.createContext({runStateMutation: fn => fn(), isExitFrozen: () => false, fileMoves:{busy:false},desktopGestureActive:()=>false,store:{paused:true,displays:[{id:'main',x:0,y:0,width:1920,height:1080,isPrimary:true}]},layoutFor:()=>layout,nextZ:()=>20,scheduleHitRectSync(){},flushState:async()=>calls.push('save'),setPausedNative:async()=>calls.push('resume'),getCurrentWebviewWindow:()=>({hide:async()=>calls.push('hide')}),showStatus:message=>calls.push(message)});
  vm.runInContext(functions('src/lib/layout.ts',['recoverSurface','containSurface','displayAtPoint'])+functions('src/stores/state.ts',['viewSurface']),c);return {c,calls,layout};}
 test('viewing a locked surface keeps its placement and saves before hiding the manager',async()=>{const t=viewTest();await t.c.viewSurface('zone');assert.equal(t.layout.x,450);assert.equal(t.layout.y,250);assert.equal(t.layout.locked,true);assert.equal(t.layout.visible,true);assert.equal(t.layout.zIndex,20);assert.deepEqual(t.calls,['resume','save','hide']);});
 test('viewing recovers offscreen surfaces, but keeps the manager open on native or save failure',async()=>{

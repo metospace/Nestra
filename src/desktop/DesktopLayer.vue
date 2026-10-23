@@ -6,6 +6,7 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 import Button from "@/ui/Button.vue";
 import { itemDrag, type DragAction } from "@/composables/useItemDrag";
 import { grantDesktopInput, releaseDesktopInput, showManager } from "@/lib/tauri";
+import { installDesktopInputFocus } from "@/composables/desktopInputFocus";
 import DesktopSearch from './DesktopSearch.vue';
 import ConfirmDialog from "./ConfirmDialog.vue";
 import SurfaceSettings from "./SurfaceSettings.vue";
@@ -18,6 +19,7 @@ import {
   createWidget,
   dropPaths,
   initialize,
+  isExitFrozen,
   itemsByPanel,
   LAUNCHER_PANEL_KEY,
   moveEntryToDesktop,
@@ -36,7 +38,7 @@ const externalHint = ref<{x: number; y: number; text: string; kind: DragAction; 
 const creatingZone = ref(false);
 
 async function createZone(): Promise<void> {
-  if (creatingZone.value) return;
+  if (creatingZone.value || isExitFrozen()) return;
   creatingZone.value = true;
   try { await addCustomGroup(`收纳区 ${store.customGroups.length + 1}`); }
   finally { creatingZone.value = false; }
@@ -61,6 +63,7 @@ function onDesktopDragOver(event: DragEvent): void {
 }
 
 function onDesktopDrop(event: DragEvent): void {
+  if (isExitFrozen()) return;
   const target = event.target as HTMLElement;
   if (target.closest(".nestra-panel")) return;
   const itemId = readItemId(event);
@@ -69,43 +72,7 @@ function onDesktopDrop(event: DragEvent): void {
   void moveEntryToDesktop(itemId);
 }
 
-/** 层窗口带 WS_EX_NOACTIVATE、永不激活——任何输入控件拿到 DOM 焦点时，
- * 都要向前台线程"借"键盘焦点，离开输入控件即归还。 */
-const TEXT_INPUT_SELECTOR = "input, textarea, select, [contenteditable]";
-let focusRevision = 0;
-
-async function focusTextControl(el: HTMLElement): Promise<void> {
-  const revision = ++focusRevision;
-  try {
-    await grantDesktopInput();
-    // WebView2's MoveFocus can return DOM focus to the document. Restore the
-    // requested editor only after the native focus operation has completed.
-    if (revision === focusRevision && el.isConnected) el.focus({ preventScroll: true });
-  } catch { showStatus("暂时无法获取键盘焦点，请重新点击输入框"); }
-}
-
-function onFocusIn(event: FocusEvent): void {
-  const el = event.target as HTMLElement | null;
-  if (el?.matches?.(TEXT_INPUT_SELECTOR)) void focusTextControl(el);
-}
-
-function onFocusOut(event: FocusEvent): void {
-  const next = event.relatedTarget as HTMLElement | null;
-  if (next?.matches?.(TEXT_INPUT_SELECTOR)) return;
-  window.requestAnimationFrame(() => {
-    if (!(document.activeElement instanceof HTMLElement) || !document.activeElement.matches(TEXT_INPUT_SELECTOR)) {
-      void releaseDesktopInput();
-    }
-  });
-}
-
-// 兜底：输入框已持有 DOM 焦点时再点它不会触发 focusin，但此时焦点可能
-// 已随点击桌面而归还——pointerdown 阶段再补一次 grant。
-function onPointerDown(event: PointerEvent): void {
-  const el = event.target as HTMLElement | null;
-  if (el?.matches?.(TEXT_INPUT_SELECTOR)) void focusTextControl(el);
-  else focusRevision += 1;
-}
+let disposeInputFocus: (() => void) | undefined;
 
 /** 托盘事件到达时层可能还在初始化——等 ready 再执行，否则事件被静默丢弃。 */
 async function whenReady(): Promise<void> {
@@ -115,6 +82,7 @@ async function whenReady(): Promise<void> {
 }
 
 function handleTrayAction(action: string): void {
+  if (isExitFrozen()) return;
   switch (action) {
     case "new-note":
       createWidget("note");
@@ -136,9 +104,8 @@ function handleTrayAction(action: string): void {
 }
 
 onMounted(async () => {
-  document.addEventListener("focusin", onFocusIn);
-  document.addEventListener("focusout", onFocusOut);
-  document.addEventListener("pointerdown", onPointerDown);
+  disposeInputFocus = installDesktopInputFocus(grantDesktopInput, releaseDesktopInput,
+    () => showStatus("暂时无法获取键盘焦点，请重新点击输入框"));
 
   // 监听必须先于 initialize 绑定：冷启动期间到的托盘事件不再丢。
   unlisten = await listen<string>("nestra://tray", (event) => {
@@ -146,6 +113,11 @@ onMounted(async () => {
   });
 
   unlistenDrag = await getCurrentWebview().onDragDropEvent((event) => {
+    if (isExitFrozen()) {
+      document.body.classList.remove("is-external-dragging");
+      externalHint.value = null;
+      return;
+    }
     document.body.classList.toggle("is-external-dragging",
       event.payload.type === "enter" || event.payload.type === "over");
     document.querySelectorAll(".is-native-drop-target").forEach((el) => el.classList.remove("is-native-drop-target"));
@@ -166,6 +138,7 @@ onMounted(async () => {
     const position = event.payload.position;
     const dpr = window.devicePixelRatio || 1;
     void whenReady().then(() => {
+      if (isExitFrozen()) return;
       const groupId = position
         ? groupAtPoint(position.x / dpr, position.y / dpr)
         : null;
@@ -184,9 +157,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   document.body.classList.remove("is-external-dragging");
-  document.removeEventListener("focusin", onFocusIn);
-  document.removeEventListener("focusout", onFocusOut);
-  document.removeEventListener("pointerdown", onPointerDown);
+  disposeInputFocus?.();
   surfaceObserver?.disconnect();
   unlisten?.();
   unlistenDrag?.();

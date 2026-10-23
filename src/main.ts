@@ -2,7 +2,7 @@ import { createApp } from "vue";
 import { createRouter, createWebHashHistory } from "vue-router";
 import ui from "@nuxt/ui/vue-plugin";
 import { addCollection } from "@iconify/vue";
-import { icons } from "@iconify-json/lucide";
+import icons from "virtual:nestra-icons";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import App from "./App.vue";
 import "./style.css";

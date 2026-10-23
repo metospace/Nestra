@@ -3,7 +3,6 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import UIcon from '@nuxt/ui/components/Icon.vue';
 import { settingsPosition, surfaceAppearance } from '@/domain/presentation';
 import { clearSurfaceBackground, scheduleSave, setPanelPresentation, setSurfaceAppearance, store } from '@/stores/state';
-import { releaseDesktopInput } from '@/lib/tauri';
 import type { PanelLayout } from '@/types';
 
 const props=defineProps<{panelKey:string}>();
@@ -26,7 +25,7 @@ function escape(event:KeyboardEvent){if(event.key==='Escape'){event.stopPropagat
 function resize(){viewport.value={width:window.innerWidth,height:window.innerHeight};}
 function hex(event:Event){const input=event.target as HTMLInputElement;if(/^#[0-9a-f]{6}$/i.test(input.value)){style('backgroundColor',input.value);input.setCustomValidity('');}else{input.setCustomValidity('请输入 # 开头的六位颜色值');input.reportValidity();}}
 onMounted(()=>{document.addEventListener('pointerdown',outside);document.addEventListener('keydown',escape);window.addEventListener('resize',resize);});
-onBeforeUnmount(()=>{document.removeEventListener('pointerdown',outside);document.removeEventListener('keydown',escape);window.removeEventListener('resize',resize);const active=document.activeElement;if(active instanceof HTMLElement&&root.value?.contains(active)){active.blur();void releaseDesktopInput();}});
+onBeforeUnmount(()=>{document.removeEventListener('pointerdown',outside);document.removeEventListener('keydown',escape);window.removeEventListener('resize',resize);const active=document.activeElement;if(active instanceof HTMLElement&&root.value?.contains(active)){active.blur();}});
 </script>
 
 <template>

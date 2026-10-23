@@ -111,9 +111,18 @@ export function moveToDesktopNative(path: string): Promise<string> {
   return invoke("move_to_desktop", { path });
 }
 
-/** 解散收纳区：目录内容全部放回桌面。返回放回的项目数。 */
-export function dissolveZone(zoneDir: string): Promise<number> {
+export interface DissolveResult {
+  moves: { fromPath: string; newPath: string }[];
+  error: string | null;
+}
+
+/** Even on partial failure, return successful moves so references can follow them. */
+export function dissolveZone(zoneDir: string): Promise<DissolveResult> {
   return invoke("dissolve_zone", { zoneDir });
+}
+
+export function acknowledgeExit(requestId: number, error: string | null = null): Promise<void> {
+  return invoke("acknowledge_exit", { requestId, error });
 }
 
 /** 收纳区改名时同步目录名。 */
@@ -150,7 +159,7 @@ export function grantDesktopInput(): Promise<void> {
   return invoke("grant_desktop_input");
 }
 
-/** 输入完成后归还焦点给之前的前台窗口。 */
+/** 输入完成后归还焦点；等待窗口线程完成后才允许下一次申请。 */
 export function releaseDesktopInput(): Promise<void> {
   return invoke("release_desktop_input");
 }

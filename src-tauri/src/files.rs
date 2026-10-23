@@ -47,6 +47,13 @@ pub fn list_file_moves() -> Vec<MoveRecord> { MOVE_HISTORY.lock().map(|items|ite
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UndoResult { pub from_path: String, pub new_path: String }
+
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DissolveResult {
+    pub moves: Vec<UndoResult>,
+    pub error: Option<String>,
+}
 pub fn undo_file_move(id: u64) -> Result<UndoResult, String> {
     let _guard = FILE_OPERATION_LOCK.lock().map_err(|e|e.to_string())?;
     let mut history = MOVE_HISTORY.lock().map_err(|e|e.to_string())?;
@@ -151,6 +158,10 @@ fn move_path(source: &Path, dest: &Path) -> Result<(), String> {
             if rename_error.raw_os_error() != Some(17) {
                 return Err(format!("无法移动，原文件保持不变：{rename_error}"));
             }
+            // CopyFileW/Path::is_dir follow links. Refuse unsupported reparse
+            // trees before creating anything, rather than copying a junction's
+            // target (or recursing through a loop) and then deleting the source.
+            validate_copy_tree(source)?;
             let copy_result = if source.is_dir() {
                 copy_dir_recursive(source, dest).and_then(|_| {
                     std::fs::remove_dir_all(source).map_err(|e| e.to_string())
@@ -183,12 +194,13 @@ fn notify_shell_move(source: &Path, dest: &Path, directory: bool) {
 }
 
 fn copy_dir_recursive(source: &Path, dest: &Path) -> Result<(), String> {
+    plain_copy_metadata(source)?;
     std::fs::create_dir(dest).map_err(|e| e.to_string())?;
     for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let child_source = entry.path();
         let child_dest = dest.join(entry.file_name());
-        if child_source.is_dir() {
+        if plain_copy_metadata(&child_source)?.is_dir() {
             copy_dir_recursive(&child_source, &child_dest)?;
         } else {
             copy_file_exclusive(&child_source, &child_dest)?;
@@ -198,8 +210,27 @@ fn copy_dir_recursive(source: &Path, dest: &Path) -> Result<(), String> {
 }
 
 fn copy_file_exclusive(source: &Path, dest: &Path) -> Result<(), String> {
+    plain_copy_metadata(source)?;
     use windows::{core::HSTRING, Win32::Storage::FileSystem::CopyFileW};
     unsafe {CopyFileW(&HSTRING::from(source.as_os_str()),&HSTRING::from(dest.as_os_str()),true)}.map_err(|e|e.to_string())
+}
+
+fn plain_copy_metadata(path: &Path) -> Result<std::fs::Metadata, String> {
+    use std::os::windows::fs::MetadataExt;
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if metadata.file_attributes() & 0x400 != 0 { // FILE_ATTRIBUTE_REPARSE_POINT
+        return Err(format!("包含链接、联接或云占位项目，无法安全跨磁盘移动，请使用资源管理器：{}", path.display()));
+    }
+    Ok(metadata)
+}
+
+fn validate_copy_tree(path: &Path) -> Result<(), String> {
+    if plain_copy_metadata(path)?.is_dir() {
+        for entry in std::fs::read_dir(path).map_err(|error| error.to_string())? {
+            validate_copy_tree(&entry.map_err(|error| error.to_string())?.path())?;
+        }
+    }
+    Ok(())
 }
 
 /// 确保 Desktop\.nestra 存在并带隐藏属性（隐藏目录 → 里面的文件
@@ -340,25 +371,42 @@ pub fn move_to_folder(path: &str, folder: Option<&str>) -> Result<String, String
 }
 
 /// 删除收纳区时调用：把目录里所有项目放回桌面顶层，再删掉空目录。
-pub fn dissolve_zone(zone_dir_name: &str) -> Result<u32, String> {
+pub fn dissolve_zone(zone_dir_name: &str) -> Result<DissolveResult, String> {
     let _guard = FILE_OPERATION_LOCK.lock().map_err(|e|e.to_string())?;
     let zone = zone_dir(zone_dir_name)?;
     if !zone.exists() {
-        return Ok(0);
+        return Ok(DissolveResult::default());
     }
     let Some(desktop) = scanner::personal_desktop() else {
         return Err("找不到桌面目录".into());
     };
-    let mut moved = 0u32;
-    for entry in std::fs::read_dir(&zone).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let dest = unique_dest(Path::new(&desktop), &name);
-        move_path(&entry.path(), &dest)?;
-        moved += 1;
-    }
-    std::fs::remove_dir(&zone).map_err(|error| error.to_string())?;
-    Ok(moved)
+    Ok(dissolve_directory(&zone, Path::new(&desktop)))
+}
+
+fn dissolve_directory(zone: &Path, desktop: &Path) -> DissolveResult {
+    let mut result = DissolveResult::default();
+    // Never lose the successful prefix of a partial operation. The frontend
+    // migrates these references before reporting an error or retrying the rest.
+    let operation = (|| -> Result<(), String> {
+        let mut entries = std::fs::read_dir(zone)
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let from = entry.path();
+            let dest = unique_dest(desktop, &entry.file_name().to_string_lossy());
+            move_path(&from, &dest)?;
+            record_move(&from, &dest);
+            result.moves.push(UndoResult {
+                from_path: from.to_string_lossy().into_owned(),
+                new_path: dest.to_string_lossy().into_owned(),
+            });
+        }
+        std::fs::remove_dir(zone).map_err(|error| error.to_string())
+    })();
+    result.error = operation.err();
+    result
 }
 
 /// 收纳区改名时同步目录名。
@@ -468,6 +516,67 @@ mod tests {
     #[test]
     fn cross_volume_copy_helpers_never_merge_or_overwrite_existing_targets() {
         let fixture=Fixture::new();let source=fixture.0.join("source");let destination=fixture.0.join("destination");std::fs::create_dir(&source).unwrap();std::fs::create_dir(&destination).unwrap();std::fs::write(source.join("test.txt"),b"source").unwrap();std::fs::write(destination.join("test.txt"),b"keep").unwrap();assert!(copy_dir_recursive(&source,&destination).is_err());assert!(copy_file_exclusive(&source.join("test.txt"),&destination.join("test.txt")).is_err());assert_eq!(std::fs::read(destination.join("test.txt")).unwrap(),b"keep");assert_eq!(std::fs::read(source.join("test.txt")).unwrap(),b"source");
+    }
+    #[test]
+    fn cross_volume_preflight_refuses_junction_loop_without_modifying_files() {
+        let fixture = Fixture::new();
+        let source = fixture.0.join("source");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("keep.txt"), b"keep").unwrap();
+        let junction = source.join("loop");
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&junction).arg(&source).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let result = validate_copy_tree(&source);
+        // Remove the junction itself before the fixture cleans up its tree.
+        std::fs::remove_dir(&junction).unwrap();
+        assert!(result.unwrap_err().contains("无法安全跨磁盘移动"));
+        assert_eq!(std::fs::read(source.join("keep.txt")).unwrap(), b"keep");
+    }
+    #[test]
+    fn dissolve_reports_actual_collision_paths_and_preserves_contents() {
+        let fixture = Fixture::new();
+        let desktop = fixture.0.join("Desktop");
+        let zone = desktop.join("zone");
+        std::fs::create_dir_all(&zone).unwrap();
+        std::fs::write(desktop.join("one.txt"), b"existing").unwrap();
+        std::fs::write(zone.join("one.txt"), b"stored").unwrap();
+        std::fs::create_dir(zone.join("folder")).unwrap();
+        std::fs::write(zone.join("folder/child.txt"), b"child").unwrap();
+        let result = dissolve_directory(&zone, &desktop);
+        assert!(result.error.is_none());
+        assert_eq!(result.moves.len(), 2);
+        assert!(!zone.exists());
+        let moved = result.moves.iter().find(|item| item.from_path.ends_with("one.txt")).unwrap();
+        assert_eq!(Path::new(&moved.new_path), desktop.join("one (2).txt"));
+        assert_eq!(std::fs::read(&moved.new_path).unwrap(), b"stored");
+        assert_eq!(std::fs::read(desktop.join("one.txt")).unwrap(), b"existing");
+        assert_eq!(std::fs::read(desktop.join("folder/child.txt")).unwrap(), b"child");
+    }
+    #[test]
+    fn dissolve_partial_failure_returns_migrations_and_retry_moves_only_remaining_items() {
+        let fixture = Fixture::new();
+        let desktop = fixture.0.join("Desktop");
+        let zone = desktop.join("zone");
+        std::fs::create_dir_all(&zone).unwrap();
+        std::fs::write(zone.join("a.txt"), b"first").unwrap();
+        std::fs::write(zone.join("b.txt"), b"locked").unwrap();
+        let locked = std::fs::OpenOptions::new().read(true).share_mode(0).open(zone.join("b.txt")).unwrap();
+        let result = dissolve_directory(&zone, &desktop);
+        assert!(result.error.is_some());
+        assert_eq!(result.moves.len(), 1);
+        assert_eq!(std::fs::read(&result.moves[0].new_path).unwrap(), b"first");
+        assert!(zone.join("b.txt").exists());
+        assert!(!zone.join("a.txt").exists());
+        assert!(!desktop.join("b.txt").exists());
+        drop(locked);
+        let retry = dissolve_directory(&zone, &desktop);
+        assert!(retry.error.is_none());
+        assert_eq!(retry.moves.len(), 1);
+        assert!(!zone.exists());
+        assert_eq!(std::fs::read(desktop.join("b.txt")).unwrap(), b"locked");
+        assert_eq!(std::fs::read(desktop.join("a.txt")).unwrap(), b"first");
     }
     #[test]
     fn move_into_zone_and_back_removes_old_icon_path_and_preserves_contents() {

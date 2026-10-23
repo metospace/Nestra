@@ -5,7 +5,7 @@
 
 #![cfg(windows)]
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use windows::core::{w, BOOL, PCWSTR};
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, WPARAM};
@@ -19,7 +19,14 @@ const SPAWN_WORKER: u32 = 0x052C;
 const MARKER: PCWSTR = w!("Nestra.HiddenDesktopIconLayer");
 const MARKER_VALUE: isize = 2;
 
-static HIDDEN_BY_US: AtomicBool = AtomicBool::new(false);
+// HWND properties disappear with Explorer. Keep ownership in this process too,
+// but only inherit it onto a replacement view after the old HWND was destroyed.
+// Serialize watchdog hide and settings/exit restore operations.
+static HIDDEN_VIEW: Mutex<isize> = Mutex::new(0);
+
+fn owns_hidden_layer(marked: bool, owned: isize, current: isize, old_is_window: bool) -> bool {
+    marked || (owned != 0 && (owned == current || !old_is_window))
+}
 
 struct FoundView {
     def_view: HWND,
@@ -28,6 +35,7 @@ struct FoundView {
 
 /// Hide Explorer desktop icons if they are currently visible.
 pub fn hide_icons() {
+    let Ok(mut owned) = HIDDEN_VIEW.lock() else { return; };
     let Some(def_view) = find_def_view() else {
         return;
     };
@@ -39,26 +47,28 @@ pub fn hide_icons() {
     let already_marked = unsafe { GetPropW(list_view, MARKER) };
     let visible = unsafe { IsWindowVisible(list_view).as_bool() };
 
-    if !visible && already_marked.0.is_null() {
+    let owns = owns_hidden_layer(!already_marked.0.is_null(), *owned, list_view.0 as isize,
+        *owned != 0 && unsafe { IsWindow(Some(HWND(*owned as _))).as_bool() });
+    if !visible && !owns {
         // User (or another tool) already hid the icons; leave them alone.
         return;
     }
 
     if visible {
         toggle_icons(def_view);
+        // A failed/hung toggle must never give us ownership of a user setting.
+        if unsafe { IsWindowVisible(list_view).as_bool() } { return; }
     }
 
     unsafe {
         let _ = SetPropW(list_view, MARKER, Some(HANDLE(MARKER_VALUE as _)));
     }
-    HIDDEN_BY_US.store(true, Ordering::SeqCst);
+    *owned = list_view.0 as isize;
 }
 
 /// Restore icons only when this process hid them.
 pub fn restore_icons() {
-    if !HIDDEN_BY_US.swap(false, Ordering::SeqCst) {
-        // Still try to clean a leftover marker after a crash/restart.
-    }
+    let Ok(mut owned) = HIDDEN_VIEW.lock() else { return; };
 
     let Some(def_view) = find_def_view() else {
         return;
@@ -70,11 +80,29 @@ pub fn restore_icons() {
 
     let marked = unsafe { GetPropW(list_view, MARKER) };
     let visible = unsafe { IsWindowVisible(list_view).as_bool() };
-    if !visible && !marked.0.is_null() {
+    let owns = owns_hidden_layer(!marked.0.is_null(), *owned, list_view.0 as isize,
+        *owned != 0 && unsafe { IsWindow(Some(HWND(*owned as _))).as_bool() });
+    if !visible && owns {
         toggle_icons(def_view);
+        if unsafe { !IsWindowVisible(list_view).as_bool() } { return; }
     }
     unsafe {
         let _ = RemovePropW(list_view, MARKER);
+    }
+    *owned = 0;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::owns_hidden_layer;
+
+    #[test]
+    fn icon_ownership_survives_explorer_restart_but_does_not_claim_user_hidden_icons() {
+        assert!(!owns_hidden_layer(false, 0, 200, false));
+        assert!(owns_hidden_layer(false, 100, 200, false));
+        assert!(!owns_hidden_layer(false, 100, 200, true));
+        assert!(owns_hidden_layer(false, 100, 100, true));
+        assert!(owns_hidden_layer(true, 0, 200, false));
     }
 }
 

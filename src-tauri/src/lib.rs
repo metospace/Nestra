@@ -21,6 +21,7 @@ mod paths;
 mod persistence;
 mod scanner;
 mod session;
+mod shutdown;
 #[cfg(windows)]
 mod startup;
 mod watch;
@@ -60,7 +61,7 @@ pub fn run() {
         .plugin(
             ShortcutBuilder::new()
                 .with_handler(|app, shortcut, event| {
-                    if event.state() != ShortcutState::Pressed {
+                    if event.state() != ShortcutState::Pressed || shutdown::in_progress() {
                         return;
                     }
                     let action = if shortcut == &Shortcut::from_str(HOTKEY_MANAGER).expect("valid hotkey") {
@@ -69,10 +70,13 @@ pub fn run() {
                         "search"
                     } else { "pause" };
                     let app = app.clone();
-                    tauri::async_runtime::spawn_blocking(move || match action {
-                        "manager" => toggle_manager(&app),
-                        "search" => session::open_search(&app),
-                        _ => { session::toggle_paused(&app); refresh_pause_label(&app); }
+                    tauri::async_runtime::spawn_blocking(move || {
+                        if shutdown::in_progress() { return; }
+                        match action {
+                            "manager" => toggle_manager(&app),
+                            "search" => session::open_search(&app),
+                            _ => { session::toggle_paused(&app); refresh_pause_label(&app); }
+                        }
                     });
                 })
                 .build(),
@@ -153,6 +157,7 @@ pub fn run() {
             commands::clip_remove,
             commands::clip_clear,
             commands::quit_app,
+            commands::acknowledge_exit,
             commands::rename_entry,
             commands::recycle_entry,
             commands::create_zone,
@@ -173,11 +178,13 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("Nestra 启动失败")
-        .run(|app, event| {
-            if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
-                session::prepare_exit();
-                let _ = app;
+        .run(|app, event| match event {
+            RunEvent::ExitRequested { api, .. } if !shutdown::approved() => {
+                api.prevent_exit();
+                shutdown::request_exit(app);
             }
+            RunEvent::Exit => session::prepare_exit(),
+            _ => {}
         });
 }
 
@@ -206,33 +213,38 @@ fn prepare_desktop_layer(app: &tauri::AppHandle) -> tauri::Result<()> {
 
     #[cfg(windows)]
     if let Ok(hwnd) = layer.hwnd() {
-        win32::pin_desktop_layer(hwnd.0 as isize);
+        let value = hwnd.0 as isize;
+        layer.run_on_main_thread(move || {
+            win32::pin_desktop_layer(value);
+        })?;
     }
 
     Ok(())
 }
 
-/// Explorer 重启/崩溃会销毁 Progman/WorkerW 宿主，我们 SetParent 上去的
-/// 桌面层窗口随之销毁。看门狗每 2s 检查一次，窗口没了就原地重建
-/// （前端挂载即重新 initialize，状态从磁盘恢复）。
+/// The layer is independent of Explorer (no cross-process SetParent). Its
+/// window-thread timer rediscovers a replaced desktop host. This watchdog also
+/// repairs geometry and rebuilds the WebView if its own HWND was destroyed.
 #[cfg(windows)]
 fn spawn_layer_watchdog(app: &tauri::AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
-      let mut bounds = win32::virtual_desktop_bounds();
       loop {
         std::thread::sleep(std::time::Duration::from_secs(2));
         if !win32::layer_destroyed() {
-            let current = win32::virtual_desktop_bounds();
-            if current != bounds {
-                // Do not subclass the HWND again when only its bounds change.
-                if let Some(layer) = app.get_webview_window("desktop") {
-                    let (x, y, width, height) = current;
-                    let _ = layer.set_position(tauri::PhysicalPosition::new(x, y));
-                    let _ = layer.set_size(tauri::PhysicalSize::new(width, height));
-                }
-                bounds = current;
-            }
+            // DPI alone can resize the HWND without changing monitor pixels.
+            // Compare its actual rectangle on the UI thread every cycle.
+            win32::recalibrate_desktop_layer();
+            continue;
+        }
+
+        // A failed/missing native binding is recoverable without destroying a
+        // live WebView. In particular, reset + failed prepare must retry rather
+        // than leaving LAYER_HWND=0 permanently treated as healthy.
+        if app.get_webview_window("desktop").and_then(|layer| layer.hwnd().ok())
+            .is_some_and(|hwnd| unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindow(
+                Some(windows::Win32::Foundation::HWND(hwnd.0 as _))).as_bool() }) {
+            if let Err(error) = prepare_desktop_layer(&app) { eprintln!("重新绑定桌面层失败：{error}"); }
             continue;
         }
 
@@ -242,12 +254,12 @@ fn spawn_layer_watchdog(app: &tauri::AppHandle) {
             std::thread::sleep(std::time::Duration::from_millis(300));
         }
 
+        // Clear the previous layer before the replacement frontend can submit
+        // its first hit rectangles. Clearing after build could erase them.
+        win32::reset_layer_handle();
         match recreate_desktop_layer(&app) {
             Ok(_) => {
-                // 建成功才重置句柄表：失败时保留旧死句柄，下个 tick 继续重试。
-                win32::reset_layer_handle();
-                let _ = prepare_desktop_layer(&app);
-                bounds = win32::virtual_desktop_bounds();
+                if let Err(error) = prepare_desktop_layer(&app) { eprintln!("绑定重建桌面层失败：{error}"); }
                 // 新 Explorer 实例的桌面图标重新出现，按设置再隐藏。
                 session::apply_takeover(&app);
             }
@@ -354,6 +366,7 @@ fn handle_tray_menu(app: &tauri::AppHandle, event: MenuEvent) {
 }
 
 fn handle_tray_action(app: &tauri::AppHandle, event: MenuEvent) {
+    if shutdown::in_progress() { return; }
     match event.id().as_ref() {
         "manager" => show_manager(app),
         "search" => session::open_search(app),
@@ -378,10 +391,7 @@ fn handle_tray_action(app: &tauri::AppHandle, event: MenuEvent) {
             notify_frontend(app, "new-zone");
         }
         "refresh" => notify_frontend(app, "refresh"),
-        "quit" => {
-            session::prepare_exit();
-            app.exit(0);
-        }
+        "quit" => shutdown::request_exit(app),
         _ => {}
     }
 }
