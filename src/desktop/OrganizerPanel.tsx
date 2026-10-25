@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { Check, CheckCheck, ChevronLeft, ChevronRight, Ellipsis, EyeOff, FolderCog, History, ListChecks, Pencil, RefreshCw, Search, SlidersHorizontal, Trash2, UnfoldVertical, X } from 'lucide-react';
+import { Check, CheckCheck, Ellipsis, EyeOff, Folder, FolderCog, History, ListChecks, Pencil, RefreshCw, Search, SlidersHorizontal, Trash2, UnfoldVertical, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -11,6 +11,7 @@ import { useOrganizerLayout } from '@/composables/useOrganizerLayout';
 import { usePanelAutoHide } from '@/composables/usePanelAutoHide';
 import { useFileMoves, openMoveResults } from '@/composables/fileMoveReports';
 import { surfaceAppearance } from '@/domain/presentation';
+import { splitOrganizerOverflow } from '@/domain/organizerLayout';
 import { dropDescription, sourceFor } from '@/domain/sources';
 import { fileFilters, matchesFilter } from '@/lib/organizer';
 import { showManager } from '@/lib/tauri';
@@ -18,6 +19,8 @@ import { batchMoveItems, batchReturnItems, bringToFront, confirmDialog, getItems
 import type { CustomGroupDefinition, DesktopEntry, Panel } from '@/types';
 import ItemTile from './ItemTile';
 import { IconButton, ResizeHandles, surfaceStyle } from './SurfaceChrome';
+import OrganizerPages from './OrganizerPages';
+import OrganizerOverflowFolder from './OrganizerOverflowFolder';
 
 export default function OrganizerPanel({ panel: rootPanel, items: initialItems }: { panel: Panel; items: DesktopEntry[] }) {
   const state = useNestra(), fileMoves = useFileMoves();
@@ -34,6 +37,7 @@ export default function OrganizerPanel({ panel: rootPanel, items: initialItems }
   const [more, setMore] = useState(false), [renaming, setRenaming] = useState(false), [nameDraft, setNameDraft] = useState(''), [renameBusy, setRenameBusy] = useState(false), nameInput = useRef<HTMLInputElement>(null);
   const [batchBusy, setBatchBusy] = useState(false), [showFolded, setShowFolded] = useState(false);
   const [page, setPage] = useState(0);
+  const [overflowOpen, setOverflowOpen] = useState(false);
   const [selectionBox, setSelectionBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null), disposeBox = useRef<(() => void) | undefined>(undefined);
   const filtered = items.filter(entry => matchesFilter(entry, aggregate ? aggregateFilter : activeGroup?.filter) && entry.name.toLowerCase().includes(localQuery.toLowerCase()));
   const foldedIds = new Set(state.foldedItems[panel.key] ?? []), foldedEntries = filtered.filter(entry => foldedIds.has(entry.id));
@@ -41,14 +45,16 @@ export default function OrganizerPanel({ panel: rootPanel, items: initialItems }
   const sizingCount = localQuery ? items.filter(entry => matchesFilter(entry, aggregate ? aggregateFilter : activeGroup?.filter) && (showFolded || !foldedIds.has(entry.id))).length : visibleEntries.length;
   const { rootRef, contentRef, fit } = useOrganizerLayout(layout, sizingCount, state.displays);
   const pageSize = fit?.pageSize ?? 1, pageCount = Math.max(1, Math.ceil(visibleEntries.length / pageSize));
-  const currentPage = Math.min(page, pageCount - 1), pageEntries = visibleEntries.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+  const folderMode = layout?.overflowMode === 'folder', overflow = splitOrganizerOverflow(visibleEntries, pageSize);
+  const hasOverflow = folderMode && overflow.overflow.length > 0;
+  const currentPage = Math.min(page, pageCount - 1), pageEntries = folderMode ? overflow.visible : visibleEntries.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
   const foldedPreviewCount = Math.max(0, Math.floor(((fit?.layout.width ?? 264) - 106) / 48));
   const selected = state.selectionPanel === panel.key ? getSelectedEntries().filter(entry => visibleEntries.some(visible => visible.id === entry.id)) : [];
   const writable = Boolean(activeGroup && sourceFor(activeGroup).writable), dropLabel = activeGroup ? dropDescription(activeGroup) : '全部来源只供浏览；请选择一个可接收文件的来源';
   const drop = useItemDrop(`zone:${rootPanel.key}`, { groupId: activeGroup?.id, mode: writable ? 'move' : 'blocked', label: dropLabel });
   const foldedDrop = useItemDrop(`fold:${rootPanel.key}`, { groupId: activeGroup?.id, mode: writable ? 'move' : 'blocked', label: '收入折叠区', fold: true });
   const expanded = usePanelAutoHide(rootPanel.key, rootRef, Boolean(layout?.autoHide) && !state.paused, layout?.autoHideDelay ?? 800,
-    more || renaming || renameBusy || batchBusy || state.surfaceSettingsKey === rootPanel.key || drop.isOver || foldedDrop.isOver);
+    more || renaming || renameBusy || batchBusy || overflowOpen || state.surfaceSettingsKey === rootPanel.key || drop.isOver || foldedDrop.isOver);
   const visibleIds = visibleEntries.map(entry => entry.id).join('\n');
   useEffect(() => {
     if (store.selectionPanel !== panel.key) return;
@@ -59,6 +65,7 @@ export default function OrganizerPanel({ panel: rootPanel, items: initialItems }
   useEffect(() => { if (searchVisible) searchInput.current?.focus(); }, [searchVisible]);
   useEffect(() => () => disposeBox.current?.(), []);
   useEffect(() => { setPage(0); }, [localQuery, activeGroup?.id, aggregateFilter, showFolded, pageSize]);
+  useEffect(() => { setOverflowOpen(false); }, [localQuery, activeGroup?.id, aggregateFilter, showFolded, hasOverflow]);
   useEffect(() => {
     if (!layout || !fit) return;
     const { x, y, width, height } = fit.layout;
@@ -95,9 +102,11 @@ export default function OrganizerPanel({ panel: rootPanel, items: initialItems }
   }
   return <motion.section initial={false} animate={{ opacity: expanded ? 1 : 0 }} transition={{ duration: .12 }} ref={element => { rootRef.current = element; drop.setNodeRef(element); }} className={`nestra-panel organizer-auto-layout is-draggable ${drop.isOver ? 'is-drop-target' : ''}`} data-auto-hidden={!expanded ? 'true' : undefined} aria-hidden={!expanded || undefined} data-group-id={activeGroup?.id} data-drop-label={dropLabel} data-drop-mode={writable ? 'move' : 'blocked'} data-material={appearance.surfaceMaterial} data-border={appearance.borderStyle} style={{ ...surfaceStyle(fit.layout, state.appearance), visibility: expanded ? 'visible' : 'hidden', pointerEvents: expanded ? 'auto' : 'none' }} onPointerDown={() => bringToFront(rootPanel.key)}>
     <header className="panel-header organizer-heading select-none" onPointerDown={event => {
-      if (renaming || (event.target as HTMLElement).closest('button,input,[role="tab"]')) return;
+      // Portal menu events bubble through React's header, but are outside its
+      // DOM. They must remain menu selections rather than starting a gesture.
+      if (!event.currentTarget.contains(event.target as Node) || renaming || (event.target as HTMLElement).closest('button,input,[role="tab"]')) return;
       bringToFront(rootPanel.key); startMove(event as unknown as PointerEvent, fit.layout, { minWidth: 264, minHeight: 176, commit: value => updateLayout(rootPanel.key, value) });
-    }} onDoubleClick={event => { if (!(event.target as HTMLElement).closest('button,input')) beginRename(); }} onContextMenu={event => { event.preventDefault(); setMore(true); }}>
+    }} onDoubleClick={event => { if (event.currentTarget.contains(event.target as Node) && !(event.target as HTMLElement).closest('button,input')) beginRename(); }} onContextMenu={event => { if (!event.currentTarget.contains(event.target as Node)) return; event.preventDefault(); setMore(true); }}>
       {renaming ? <><Input ref={nameInput} value={nameDraft} onChange={event => setNameDraft(event.target.value)} aria-label="收纳区名称" className="h-7 min-w-0 flex-1" disabled={renameBusy} onPointerDown={event => event.stopPropagation()} onKeyDown={event => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === 'Enter') { event.preventDefault(); void saveName(); } if (event.key === 'Escape' && !renameBusy) setRenaming(false); }} /><IconButton aria-label="保存名称" disabled={renameBusy || !nameDraft.trim()} onClick={() => void saveName()}><Check /></IconButton><IconButton aria-label="取消重命名" disabled={renameBusy} onClick={() => setRenaming(false)}><X /></IconButton></> : <>
         <div className="organizer-title" title="双击重命名 · 右键更多操作"><h2>{tabModel?.name ?? panel.title}</h2></div>
         <IconButton aria-label="搜索此栏" title="搜索此栏" onClick={() => { setSearchVisible(!searchVisible); if (searchVisible) setLocalQuery(''); }}><Search /></IconButton>
@@ -128,11 +137,12 @@ export default function OrganizerPanel({ panel: rootPanel, items: initialItems }
     {state.mappingErrors[panel.groupId] && <p role="status" className="px-3 pb-2 text-xs text-amber-600">{state.mappingErrors[panel.groupId]}</p>}
     {foldedEntries.length > 0 && !showFolded && <div ref={foldedDrop.setNodeRef} className="fold-strip" data-fold-target title="拖到分区或桌面上即可取出">{foldedEntries.slice(0, foldedPreviewCount).map(entry => <ItemTile key={entry.id} entry={entry} compact folded panelKey={panel.key} />)}{foldedEntries.length > foldedPreviewCount && <Button variant="ghost" size="sm" aria-label="展开全部折叠项目" onClick={() => setShowFolded(true)}>+{foldedEntries.length - foldedPreviewCount}</Button>}</div>}
     <div ref={contentRef} className={`organizer-content min-h-0 flex-1 overflow-hidden p-2 ${selected.length > 1 ? 'has-selection' : ''}`} onPointerDown={startBox}>
-      {visibleEntries.length > 0 ? <div className={`items-layout surface-item-grid ${layout.viewMode === 'list' ? 'is-list' : ''}`} style={{ gridTemplateColumns: `repeat(${fit.columns}, minmax(0, 1fr))`, gridAutoRows: `${fit.tileHeight}px` }}>{pageEntries.map(entry => <ItemTile key={entry.id} entry={entry} folded={foldedIds.has(entry.id)} panelKey={panel.key} list={layout.viewMode === 'list'} selectionOrder={visibleEntries.map(item => item.id)} />)}</div> : <div className="empty-hint"><p>{items.length && !filtered.length ? '没有符合条件的项目' : foldedEntries.length ? '项目都已折叠' : activeGroup?.mappedPath ? '文件夹为空' : '空收纳区'}</p><small>{writable ? '拖入文件会移动到此目录' : '选择其他来源，或调整筛选条件'}</small></div>}
+      {visibleEntries.length > 0 ? <div className={`items-layout surface-item-grid ${layout.viewMode === 'list' ? 'is-list' : ''}`} style={{ gridTemplateColumns: `repeat(${fit.columns}, minmax(0, 1fr))`, gridAutoRows: `${fit.tileHeight}px` }}>{pageEntries.map(entry => <ItemTile key={entry.id} entry={entry} folded={foldedIds.has(entry.id)} panelKey={panel.key} list={layout.viewMode === 'list'} selectionOrder={visibleEntries.map(item => item.id)} />)}{hasOverflow && <Button variant="ghost" className={`tile overflow-folder h-full ${layout.viewMode === 'list' ? 'is-list' : ''}`} aria-label={`打开更多项目，${overflow.overflow.length} 项`} onClick={() => setOverflowOpen(true)}><Folder className="overflow-folder-icon text-amber-500"/><span className="tile-label">更多项目 ({overflow.overflow.length})</span></Button>}</div> : <div className="empty-hint"><p>{items.length && !filtered.length ? '没有符合条件的项目' : foldedEntries.length ? '项目都已折叠' : activeGroup?.mappedPath ? '文件夹为空' : '空收纳区'}</p><small>{writable ? '拖入文件会移动到此目录' : '选择其他来源，或调整筛选条件'}</small></div>}
     </div>
-    {fit.pageCount > 1 && <nav data-organizer-pages className="organizer-pages" aria-label={`${panel.title}项目分页`}><Button size="icon-xs" variant="ghost" aria-label="上一页项目" disabled={currentPage === 0} onClick={() => setPage(value => Math.max(0, value - 1))}><ChevronLeft/></Button><span>{currentPage + 1} / {pageCount} 页 · {visibleEntries.length} 项</span><Button size="icon-xs" variant="ghost" aria-label="下一页项目" disabled={currentPage >= pageCount - 1} onClick={() => setPage(value => Math.min(pageCount - 1, value + 1))}><ChevronRight/></Button></nav>}
+    {!folderMode && <OrganizerPages title={panel.title} page={currentPage} pageCount={pageCount} count={visibleEntries.length} onChange={setPage}/>}
     {selectionBox && <div className="selection-box" style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} />}
     <ResizeHandles layout={fit.layout} minHeight={fit.minHeight} commit={value => updateLayout(rootPanel.key, { ...value, autoSize: false })} onStart={() => bringToFront(rootPanel.key)}/>
+    {overflowOpen && hasOverflow && <OrganizerOverflowFolder layout={layout} entries={overflow.overflow} panelKey={panel.key} title={tabModel?.name ?? panel.title} onClose={() => setOverflowOpen(false)}/>}
   </motion.section>;
 }
 

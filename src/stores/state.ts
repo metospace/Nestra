@@ -1757,7 +1757,7 @@ export async function addCustomGroup(name: string): Promise<boolean> {
 
 export function setPanelPresentation(
   key: string,
-  patch: Pick<Partial<PanelLayout>, "viewMode" | "columns" | "density" | "iconSize" | "itemGap" | "labelLines" | "autoHide" | "autoHideDelay" | "autoSize">,
+  patch: Pick<Partial<PanelLayout>, "viewMode" | "columns" | "density" | "iconSize" | "itemGap" | "labelLines" | "autoHide" | "autoHideDelay" | "autoSize" | "overflowMode">,
 ): void {
   const normalized = { ...patch };
   if (normalized.columns != null) normalized.columns = Math.max(2, Math.min(8, normalized.columns));

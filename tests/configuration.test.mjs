@@ -79,3 +79,5 @@ test('restoring a directory from a backup with an old identity reconnects the ex
 });
 
 test('manual organizer sizing is persisted independently and rejects non-boolean sizing modes',()=>{const saved=config();saved.panelLayouts['zone:zone'].autoSize=false;assert.doesNotThrow(()=>context.validateConfiguration(saved));const restored=context.migrateConfiguration(saved);assert.equal(restored.panelLayouts['zone:zone'].autoSize,false);for(const value of [null,'false',1]){const invalid=config();invalid.panelLayouts['zone:zone'].autoSize=value;assert.throws(()=>context.validateConfiguration(invalid));}});
+
+test('overflow folder mode survives configuration reload and unsupported modes are rejected',()=>{const saved=config();saved.panelLayouts['zone:zone'].overflowMode='folder';context.validateConfiguration(saved);assert.equal(context.migrateConfiguration(saved).panelLayouts['zone:zone'].overflowMode,'folder');for(const value of [null,'move',true,1]){const invalid=config();invalid.panelLayouts['zone:zone'].overflowMode=value;assert.throws(()=>context.validateConfiguration(invalid));}});

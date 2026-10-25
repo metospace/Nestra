@@ -35,3 +35,22 @@ test('desktop settings stay visible beside edge panels and fit small viewports',
 test('auto-hide changes only its selected surface and keeps delays within supported bounds',()=>{const c=setup();c.setPanelPresentation('a',{autoHide:true,autoHideDelay:9000});assert.equal(c.store.panelLayouts.a.autoHide,true);assert.equal(c.store.panelLayouts.a.autoHideDelay,5000);assert.equal(c.store.panelLayouts.b.autoHide,undefined);c.setPanelPresentation('a',{autoHideDelay:0});assert.equal(c.store.panelLayouts.a.autoHideDelay,200);c.setPanelPresentation('a',{autoHideDelay:NaN});assert.equal(c.store.panelLayouts.a.autoHideDelay,800);});
 
 test('tall desktop settings reserve the actual top offset so bottom controls stay onscreen',()=>{for(const y of [12,90,600]){const p=c.settingsPosition({x:36,y,width:286},{width:1280,height:720});assert.ok(p.top+p.maxHeight<=708);}});
+
+test('desktop notices avoid taskbars on each edge and stay on the primary monitor',()=>{
+ const viewport={width:3840,height:2160};
+ for(const area of [{x:1920,y:0,width:1920,height:1000},{x:1920,y:80,width:1920,height:1000},{x:2000,y:0,width:1840,height:1080},{x:1920,y:0,width:1800,height:1080}]){
+  const p=c.desktopNoticePosition([{id:'secondary',x:0,y:1080,width:1920,height:1080},{id:'primary',x:1920,y:0,width:1920,height:1080,isPrimary:true,workArea:area}],viewport);
+  const bottom=viewport.height-p.bottom;
+  assert.ok(bottom<=area.y+area.height-16);assert.ok(bottom-p.maxHeight>=area.y+16);
+  assert.ok(p.left-p.maxWidth/2>=area.x+16);assert.ok(p.left+p.maxWidth/2<=area.x+area.width-16);
+ }
+});
+test('folder overflow preferences affect only the chosen organizer',()=>{const c=setup();c.setPanelPresentation('a',{overflowMode:'folder'});assert.equal(c.store.panelLayouts.a.overflowMode,'folder');assert.equal(c.store.panelLayouts.b.overflowMode,undefined);c.setPanelPresentation('a',{overflowMode:'pages'});assert.equal(c.store.panelLayouts.a.overflowMode,'pages');});
+
+test('desktop settings stay inside their monitor work area, including top and side taskbars',()=>{
+ for(const area of [{x:0,y:0,width:1280,height:656},{x:0,y:64,width:1280,height:656},{x:64,y:0,width:1216,height:720},{x:1920,y:0,width:1280,height:650}]){
+  const p=c.settingsPosition({x:area.x+area.width-250,y:area.y+area.height-100,width:300},{width:3840,height:2160},area);
+  assert.ok(p.left>=area.x+12);assert.ok(p.left+p.width<=area.x+area.width-12);
+  assert.ok(p.top>=area.y+12);assert.ok(p.top+p.maxHeight<=area.y+area.height-12);
+ }
+});

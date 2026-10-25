@@ -64,6 +64,7 @@
 .status-notice { display:flex; align-items:center; gap:9px; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--popover); color:var(--popover-foreground); box-shadow:0 3px 16px #15223814; font-size:12px; max-width:min(640px,calc(100vw - 32px)); }
 .status-notice>span { flex:1; min-width:0; overflow-wrap:anywhere; }
 .manager-toast,.status-toast { position:fixed; bottom:24px; left:50%; translate:-50% 0; z-index:9900; }
+.status-toast { overflow-y:auto; }
 .status-notice-inline { margin:0 16px 8px; box-shadow:none; }
 .search-window { height:100dvh; display:flex; flex-direction:column; background:var(--background); }
 .navigation-panel { display:flex; flex-direction:column; min-height:350px; height:100%; max-height:100%; min-width:0; }

@@ -126,7 +126,11 @@ pub struct DisplayInfo {
     pub width: f64,
     pub height: f64,
     pub is_primary: bool,
+    pub work_area: DisplayWorkArea,
 }
+
+#[derive(Clone, Serialize)]
+pub struct DisplayWorkArea { pub x: f64, pub y: f64, pub width: f64, pub height: f64 }
 
 #[tauri::command]
 pub fn list_displays(app: AppHandle) -> Result<Vec<DisplayInfo>, String> {
@@ -139,6 +143,7 @@ pub fn list_displays(app: AppHandle) -> Result<Vec<DisplayInfo>, String> {
     Ok(monitors.into_iter().map(|monitor| {
         let position = monitor.position();
         let size = monitor.size();
+        let work_area = monitor.work_area();
         let is_primary = primary.as_ref().is_some_and(|candidate|
             candidate.position() == position && candidate.size() == size);
         let name = monitor.name().cloned().unwrap_or_else(|| "显示器".into());
@@ -151,6 +156,12 @@ pub fn list_displays(app: AppHandle) -> Result<Vec<DisplayInfo>, String> {
             width: size.width as f64 / scale,
             height: size.height as f64 / scale,
             is_primary,
+            work_area: DisplayWorkArea {
+                x: (work_area.position.x - origin_x) as f64 / scale,
+                y: (work_area.position.y - origin_y) as f64 / scale,
+                width: work_area.size.width as f64 / scale,
+                height: work_area.size.height as f64 / scale,
+            },
         }
     }).collect())
 }

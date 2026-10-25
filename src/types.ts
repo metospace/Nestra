@@ -54,6 +54,8 @@ export interface PanelLayout {
   autoHideDelay?: number;
   /** Dragging a resize handle disables automatic sizing for this organizer. */
   autoSize?: boolean;
+  /** How to present items that exceed this organizer's visible capacity. */
+  overflowMode?: "pages" | "folder";
   /** Missing fields inherit the global desktop appearance. */
   appearance?: Partial<Omit<AppearanceSettings, "theme">> & { backgroundColor?: string };
   monitorId?: string;
@@ -73,6 +75,8 @@ export interface DisplayInfo {
   width: number;
   height: number;
   isPrimary: boolean;
+  /** Logical desktop coordinates excluding taskbars and other reserved edges. */
+  workArea?: { x: number; y: number; width: number; height: number };
 }
 
 export interface TabGroupDefinition {

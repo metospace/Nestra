@@ -67,6 +67,7 @@ export function validateConfiguration(input: unknown): asserts input is Persiste
     if (layout.viewMode !== undefined && !["grid","list"].includes(layout.viewMode)) return false;
     if (layout.autoHide !== undefined && typeof layout.autoHide !== 'boolean') return false;
     if (layout.autoSize !== undefined && typeof layout.autoSize !== 'boolean') return false;
+    if (layout.overflowMode !== undefined && !['pages', 'folder'].includes(layout.overflowMode)) return false;
     if (layout.autoHideDelay !== undefined && (!Number.isInteger(layout.autoHideDelay) || layout.autoHideDelay < 200 || layout.autoHideDelay > 5000)) return false;
     if (layout.appearance !== undefined) {
       const a = layout.appearance;
