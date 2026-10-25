@@ -1,0 +1,40 @@
+import { useEffect, useState } from 'react';
+import { AppWindow, ArrowDown, ArrowUp, File, FolderPlus, Plus, Rocket, Search } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Switch } from '@/components/ui/switch';
+import { pickFile, pickFolder, scanPaths } from '@/lib/tauri';
+import { LAUNCHER_PANEL_KEY, getLauncherEntries, launchEntries, mutateStore, pinEntry, rebindLauncher, reorderLauncher, setLauncherVisible, showStatus, toggleLauncher, useNestra } from '@/stores/state';
+import { CheckLabel, EditableName, EmptyState, Field, Modal, PageHeading, Section } from './primitives';
+
+export default function LauncherManagement() {
+  const store = useNestra();
+  const [missing, setMissing] = useState<string[]>([]);
+  const [query, setQuery] = useState('');
+  const [collectionOpen, setCollectionOpen] = useState(false);
+  const [collectionName, setCollectionName] = useState('');
+  const [editingCollection, setEditingCollection] = useState('');
+  const [members, setMembers] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const launcherEntries = getLauncherEntries();
+  const entries = launcherEntries.filter(entry => entry.name.toLowerCase().includes(query.toLowerCase()));
+  const check = async () => { try { const physical = getLauncherEntries().filter(entry => entry.launchKind === 'filesystem'); const found = await scanPaths(physical.map(entry => entry.path)); const paths = new Set(found.map(entry => entry.path.toLowerCase())); setMissing(physical.filter(entry => !paths.has(entry.path.toLowerCase())).map(entry => entry.id)); } catch (error) { showStatus(`检查入口失败：${error}`); } };
+  const add = async (oldId?: string, folder = false) => { try { const path = folder ? await pickFolder() : await pickFile(); if (!path) return; const entry = (await scanPaths([path]))[0]; if (!entry) throw new Error('文件不可访问'); if (oldId) rebindLauncher(oldId, entry); else pinEntry(entry); await check(); } catch (error) { showStatus(`无法添加入口：${error}`); } };
+  const editCollection = (id = '') => { const collection = store.launchCollections.find(item => item.id === id); setEditingCollection(id); setCollectionName(collection?.name ?? ''); setMembers(collection?.entryIds.slice() ?? []); setCollectionOpen(true); };
+  const saveCollection = () => {
+    if (!collectionName.trim()) return;
+    mutateStore(draft => { const collection = draft.launchCollections.find(item => item.id === editingCollection); if (collection) Object.assign(collection, { name: collectionName.trim(), entryIds: [...members] }); else draft.launchCollections.push({ id: crypto.randomUUID(), name: collectionName.trim(), entryIds: [...members] }); });
+    setCollectionOpen(false);
+  };
+  const launch = async (ids: string[]) => { if (busy) return; setBusy(true); try { const available = getLauncherEntries(); await launchEntries(ids.map(id => available.find(entry => entry.id === id)).filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))); } finally { setBusy(false); } };
+  useEffect(() => { void check(); }, []);
+  return <><PageHeading title="快捷启动" description="固定常用应用与文件，按工作场景批量打开。"><Button onClick={() => void add()}><Plus/>添加入口</Button></PageHeading>
+    <Section><div className="settings-row"><div><h2>桌面启动栏</h2><p>入口只保存引用，原文件不移动。恢复显示时保留原来的位置。</p></div><div className="page-actions"><Switch checked={store.panelLayouts[LAUNCHER_PANEL_KEY]?.visible === true && !store.paused} aria-label="在桌面显示启动栏" onCheckedChange={value => void setLauncherVisible(value)}/><Button variant="outline" size="sm" onClick={() => void setLauncherVisible(true)}>查看启动栏</Button></div></div></Section>
+    <div className="page-toolbar"><div className="search-field"><Search size={16}/><Input value={query} onChange={event => setQuery(event.target.value)} placeholder="筛选快捷入口" aria-label="筛选快捷入口"/></div><Button variant="outline" onClick={() => void add(undefined, true)}><FolderPlus/>添加文件夹</Button><Button variant="outline" onClick={() => void check()}>检查可用性</Button><Button variant="outline" disabled={busy || !store.launcherIds.length} onClick={() => void launch(store.launcherIds)}>{busy ? '正在启动…' : '启动全部'}</Button></div>
+    <Section title="快捷入口" action={<span className="muted-text">{entries.length} 个</span>}>{entries.map(entry => { const Icon = entry.isApplication ? AppWindow : File; return <div className="source-row" key={entry.id}><div className="source-icon"><Icon/></div><div className="row-content"><EditableName value={entry.name} label="入口显示名称" className="row-name-input" onCommit={value => mutateStore(draft => { draft.launcherReferences[entry.id] = { ...entry, name: value }; })}/><small>{entry.path}</small>{missing.includes(entry.id) && <p className="error-text">目标失联，入口已保留。可重新绑定或移除引用。</p>}</div><Button variant="ghost" size="icon" aria-label={`向前移动${entry.name}`} disabled={store.launcherIds[0] === entry.id} onClick={() => reorderLauncher(entry.id, -1)}><ArrowUp/></Button><Button variant="ghost" size="icon" aria-label={`向后移动${entry.name}`} disabled={store.launcherIds.at(-1) === entry.id} onClick={() => reorderLauncher(entry.id, 1)}><ArrowDown/></Button>{missing.includes(entry.id) ? <Button size="sm" variant="outline" onClick={() => void add(entry.id)}>重新绑定</Button> : <Button size="sm" variant="outline" disabled={busy} onClick={() => void launch([entry.id])}>打开</Button>}<Button variant="ghost" size="sm" onClick={() => toggleLauncher(entry.id)}>移除引用</Button></div>; })}{!entries.length && <EmptyState icon={Rocket} title="把常用入口放在手边" description="在搜索结果中固定应用，或添加一个本机文件。"><Button variant="outline" onClick={() => void add()}>添加入口</Button></EmptyState>}</Section>
+    <Section title="启动集合" description="把同一工作场景的入口一起打开。" action={<Button variant="ghost" size="sm" disabled={!store.launcherIds.length} onClick={() => editCollection()}><Plus/>新建集合</Button>}>{store.launchCollections.map(collection => <div className="source-row" key={collection.id}><div className="row-content"><EditableName value={collection.name} label="集合名称" onCommit={value => mutateStore(draft => { const target = draft.launchCollections.find(item => item.id === collection.id); if (target) target.name = value; })}/><small>{collection.entryIds.length} 个入口 · {collection.entryIds.map(id => launcherEntries.find(entry => entry.id === id)?.name ?? '失联入口').join('、')}</small></div><Button variant="outline" disabled={busy} onClick={() => void launch(collection.entryIds)}>启动集合</Button><Button variant="ghost" onClick={() => editCollection(collection.id)}>编辑成员</Button><Button variant="ghost" className="text-destructive" onClick={() => mutateStore(draft => { draft.launchCollections = draft.launchCollections.filter(item => item.id !== collection.id); })}>移除集合</Button></div>)}{!store.launchCollections.length && <p className="card-note">例如为“开发工作”组合编辑器、浏览器和项目文档。</p>}</Section>
+    {store.operationResults.length > 0 && <Section title="本次启动结果">{store.operationResults.map(result => <div key={result.path} className={`plan-row ${!result.ok ? 'error-text' : ''}`}><strong>{result.name} · {result.ok ? '已打开' : '失败'}</strong><small>{result.message}</small></div>)}</Section>}
+    <Modal open={collectionOpen} onOpenChange={setCollectionOpen} title={editingCollection ? '编辑启动集合' : '新建启动集合'} description="集合只保存入口引用。" footer={<><Button variant="outline" onClick={() => setCollectionOpen(false)}>取消</Button><Button disabled={!collectionName.trim() || !members.length} onClick={saveCollection}>{editingCollection ? '保存集合' : '创建集合'}</Button></>}><div className="form-stack"><Field label="集合名称"><Input value={collectionName} onChange={event => setCollectionName(event.target.value)} placeholder="例如：开发工作" aria-label="集合名称"/></Field>{launcherEntries.map(entry => <CheckLabel key={entry.id} label={entry.name}><Checkbox checked={members.includes(entry.id)} onCheckedChange={value => setMembers(current => value === true ? [...current, entry.id] : current.filter(id => id !== entry.id))}/></CheckLabel>)}</div></Modal>
+  </>;
+}

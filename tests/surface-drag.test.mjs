@@ -61,3 +61,19 @@ test('manual resize cancels automatic recovery so the old size cannot return lat
  assert.equal(layout.displacedFrom,undefined);assert.equal(layout.monitorId,'main');
  t.events.get('pointerup')();assert.equal(t.saves,1);
 });
+
+test('React geometry commits leave detached snapshots and concurrent appearance or z-order unchanged',()=>{
+ const t=setup(),layout=Object.freeze({x:100,y:100,width:336,height:400,zIndex:12,appearance:{panelOpacity:.8},displacedFrom:{monitorId:'gone'}}),patches=[];
+ t.context.startMove(t.event(110,110),layout,{commit:patch=>patches.push(patch)});t.move(400,200);
+ assert.equal(layout.x,100);assert.equal(layout.zIndex,12);assert.equal(patches.length,1);
+ assert.equal(patches[0].x,390);assert.equal('zIndex' in patches[0],false);assert.equal('appearance' in patches[0],false);
+ assert.equal(Object.hasOwn(patches[0],'displacedFrom'),true);assert.equal(patches[0].displacedFrom,undefined);
+ t.events.get('pointerup')();assert.equal(t.saves,1);
+});
+
+test('React resizing emits only geometry without mutating a frozen render snapshot',()=>{
+ const t=setup(),layout=Object.freeze({x:100,y:100,width:336,height:400,zIndex:12}),patches=[];
+ t.context.startResize(t.event(110,110),'se',layout,{commit:patch=>patches.push(patch)});t.move(150,150);
+ assert.equal(layout.width,336);assert.equal(patches[0].width,376);assert.equal('zIndex' in patches[0],false);
+ t.events.get('pointerup')();assert.equal(t.saves,1);
+});

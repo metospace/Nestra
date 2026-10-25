@@ -1,27 +1,9 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="UTF-8"><title>桌面收纳栏设置 · 组件验收</title></head><body data-window="manager"><div id="app"></div>
-<script type="module">
-// Isolated UI fixture: memory-only IPC, synthetic files, no native file operations.
-let disk=null;
-window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'fixture'},currentWebview:{label:'fixture'}},invoke:async(command,args)=>{if(command==='load_state')return disk;if(command==='save_state'){disk=structuredClone(args.state);return;}if(command==='release_desktop_input')return;throw Error(`Fixture blocked IPC: ${command}`);}};
-const {createApp,h,computed}=await import('vue');
-const {default:ui}=await import('@nuxt/ui/vue-plugin');
-const {addCollection}=await import('@iconify/vue');
-const {icons}=await import('@iconify-json/lucide');addCollection(icons);
-await import('/src/style.css');
-await import('/src/product.css');
-const {default:OrganizerPanel}=await import('/src/desktop/OrganizerPanel.vue');
-const {default:SurfaceSettings}=await import('/src/desktop/SurfaceSettings.vue');
-const {store,setAppearance,useGlobalAppearanceForAll}=await import('/src/stores/state.ts');
-const panels=['资料','待处理'].map((title,index)=>({key:`zone:fixture-${index}`,groupId:`fixture-${index}`,title}));
-store.panels=panels;store.customGroups=panels.map(p=>({id:p.groupId,name:p.title,dirName:p.title}));
-for(const [index,p]of panels.entries())store.panelLayouts[p.key]={x:60+index*400,y:150,width:336,height:400,zIndex:10+index,visible:true};
-store.entries=panels.flatMap(p=>['项目文档','设计资料'].map((name,i)=>({id:`file:C:\\fixture\\${p.title}\\${name}.txt`,name,path:`C:\\fixture\\${p.title}\\${name}.txt`,target:'',kind:'file',launchKind:'filesystem',sourceLabel:p.title,glyph:'文',isHidden:false,isFresh:false,isApplication:false,iconPath:null,canManage:false,zone:p.title})));
-store.ready=true;setAppearance({theme:'light',surfaceMaterial:'clear',cornerStyle:'standard',borderStyle:'subtle',panelOpacity:.95});
-createApp({setup(){const state=computed(()=>JSON.stringify({global:store.appearance,layouts:store.panelLayouts,settings:store.surfaceSettingsKey}));return()=>h('div',[
-h('div',{style:'padding:24px;display:flex;gap:20px;align-items:center'},[h('strong','桌面收纳栏设置 · 组件验收'),h('button',{onClick:()=>setAppearance({cornerStyle:'rounded'})},'全局圆润风格'),h('button',{onClick:useGlobalAppearanceForAll},'统一全局风格')]),
-...panels.map(p=>h(OrganizerPanel,{panel:p,items:store.entries.filter(e=>e.zone===p.title)})),
-store.surfaceSettingsKey?h(SurfaceSettings,{key:store.surfaceSettingsKey,panelKey:store.surfaceSettingsKey}):null,
-h('output',{'aria-label':'验收状态',style:'position:fixed;bottom:12px;left:20px;font:10px monospace;max-width:95%;overflow-wrap:anywhere'},state.value)
-]);}}).use(ui).mount('#app');
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>桌面收纳栏设置 · 组件验收</title><link rel="stylesheet" href="./fixture.css"></head><body data-window="desktop"><div id="app"></div><script type="module">
+import { configuration, entry, installFixture, layout, mountFixtureApp } from './mock-native.js';
+const groups=['资料','待处理'].map((name,index)=>({id:`fixture-${index}`,name,dirName:name,sourceKind:'zone'}));
+installFixture({disk:configuration({customGroups:groups,panelLayouts:{...configuration().panelLayouts,...Object.fromEntries(groups.map((group,index)=>[`zone:${group.id}`,layout(60+index*400,100,336,400)]))}}),files:groups.flatMap(group=>['项目文档','设计资料'].map(name=>entry(name,group.name)))});
+const React=await import('react');const {useNestra,setAppearance,useGlobalAppearanceForAll}=await import('/src/stores/state.ts');const h=React.createElement;
+function Controls(){const state=useNestra();return h('div',null,h('strong',null,'桌面收纳栏设置 · 组件验收'),h('button',{onClick:()=>setAppearance({cornerStyle:'rounded'})},'全局圆润风格'),h('button',{onClick:useGlobalAppearanceForAll},'统一全局风格'),h('details',null,h('summary',null,'验收状态'),h('output',{'aria-label':'验收状态'},JSON.stringify({global:state.appearance,layouts:state.panelLayouts,settings:state.surfaceSettingsKey}))));}
+await mountFixtureApp(Controls);
 </script></body></html>

@@ -11,6 +11,7 @@ const code = ts.transpile(fn.getText(ast), { target: ts.ScriptTarget.ES2022 });
 function setup(resolveIconPairs, count = 1) {
   let retries = 0;
   const context = vm.createContext({
+    publishState() {},
     store: { entries: Array.from({ length: count }, (_, i) => ({ path: `path-${i}`, target: "" })) },
     iconUrls: new Map(), iconFillBusy: false, resolveIconPairs,
     convertFileSrc: value => `asset:${value}`, scheduleIconFill: () => { retries++; },

@@ -5,7 +5,7 @@
 const layout=(x,y,width=336,height=432)=>({x,y,width,height,zIndex:10,visible:true,monitorId:'preview'});
 const groups=[{id:'project',name:'项目资料',dirName:'项目资料',sourceKind:'zone'},{id:'inbox',name:'待处理',dirName:'待处理',sourceKind:'zone'}];
 const entries=groups.flatMap((group,index)=>(index?['邮件附件','待整理文档','截图.png']:['设计稿','项目文档','参考图片','会议记录','产品方案','交付文件','需求截图.png','版本说明.txt']).map((name,i)=>({id:`file:C:\\preview\\${group.name}\\${name}`,name,path:`C:\\preview\\${group.name}\\${name}`,target:'',kind:i<2?'folder':'file',launchKind:'filesystem',sourceLabel:group.name,glyph:'文',isHidden:false,isFresh:false,isApplication:false,iconPath:null,canManage:true,zone:group.dirName})));
-let disk={schemaVersion:2,coexistMigrated:true,panelLayouts:{'zone:project':layout(80,120),'zone:inbox':layout(480,120),'system:launcher':{...layout(880,120),visible:false}},customGroups:groups,tabGroups:[],foldedItems:{},itemOrders:{},launcherIds:[],appearance:{theme:'light',surfaceMaterial:'clear',cornerStyle:'standard',borderStyle:'subtle',panelOpacity:.95},widgets:[{id:'note',kind:'note',title:'便签',content:'周五前完成设计评审\n记得备份项目资料',todos:[],layout:layout(600,120,270,180),createdAt:1},{id:'todo',kind:'todo',title:'今天的待办',content:'',todos:[{id:'1',text:'整理项目文件',completed:true},{id:'2',text:'确认新版界面',completed:false},{id:'3',text:'准备评审资料',completed:false}],layout:layout(600,330,270,220),createdAt:1}],startWithWindows:false,hideNativeIcons:false,clipboardEnabled:true};
+let disk={schemaVersion:2,coexistMigrated:true,panelLayouts:{'zone:project':layout(80,120),'zone:inbox':layout(480,120),'system:launcher':{...layout(880,120),visible:false}},customGroups:groups,tabGroups:[],foldedItems:{},itemOrders:{},launcherIds:[],appearance:{styleVersion:1,theme:'light',surfaceMaterial:'clear',cornerStyle:'standard',borderStyle:'subtle',panelOpacity:.95},widgets:[{id:'note',kind:'note',title:'便签',content:'周五前完成设计评审\n记得备份项目资料',todos:[],layout:layout(600,120,270,180),createdAt:1},{id:'todo',kind:'todo',title:'今天的待办',content:'',todos:[{id:'1',text:'整理项目文件',completed:true},{id:'2',text:'确认新版界面',completed:false},{id:'3',text:'准备评审资料',completed:false}],layout:layout(600,330,270,220),createdAt:1}],startWithWindows:false,hideNativeIcons:false,clipboardEnabled:true};
 let callbackId=0;const callbacks=new Map();
 const flags=new URLSearchParams(location.search),pendingSearch=[];
 if(flags.has('searchHold')){
@@ -30,5 +30,5 @@ window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'manager'},currentWeb
   if(['set_mapping_watch_paths','set_clipboard_enabled','set_hit_rects','set_hide_native_icons','release_desktop_input','grant_desktop_input','open_search','set_paused','set_start_with_windows'].includes(command)||command.startsWith('plugin:event|')||command.startsWith('plugin:window|'))return;
   throw Error(`Preview blocks native operation: ${command}`);
 }};
-await import('/src/main.ts');
+await import('/src/main.tsx');
 </script></body></html>

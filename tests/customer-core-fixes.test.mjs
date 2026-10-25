@@ -11,15 +11,29 @@ function functions(path,names) {
 }
 test('async result enrichment preserves the latest keyboard selection and expands visible rows',async()=>{
   let callback,partial,finish;
-  const c=vm.createContext({runStateMutation: fn => fn(), isExitFrozen: () => false, visibleCount:{value:24},results:{value:[]},active:{value:0},message:{value:''},loading:{value:false},query:{value:'a'},scope:{value:'all'},timer:undefined,revision:0,window:{clearTimeout(){},setTimeout:fn=>{callback=fn;return 1;}},searchWithDetails:async(_query,_scope,apply)=>{partial=apply;apply({entries:[{id:'a'},{id:'b'}],message:'local'});return new Promise(resolve=>finish=resolve)}});
-  vm.runInContext(functions('src/features/SearchPanel.vue',['queue']),c);
-  c.queue();const pending=callback();c.active.value=1;
-  partial({entries:[{id:'c'},{id:'a'},{id:'b'}],message:'partial'});assert.equal(c.active.value,2);
+  const source=readFileSync('src/features/SearchPanel.tsx','utf8');
+  const ast=ts.createSourceFile('SearchPanel.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  const effects=[];
+  function visit(node){if(ts.isCallExpression(node)&&node.expression.getText(ast)==='useEffect')effects.push(node.arguments[0]);ts.forEachChild(node,visit)}
+  visit(ast);
+  const searchEffect=effects.find(node=>node.getText(ast).includes('searchWithDetails'));
+  const resetEffect=effects.find(node=>node.getText(ast).includes('setVisibleCount(24)'));
+  assert.ok(searchEffect&&resetEffect,'Exercise the production search and reset effects');
+  const c=vm.createContext({visibleCount:24,results:[],active:0,message:'',loading:false,query:'a',scope:'all',resultsRef:{current:[]},activeRef:{current:0},revision:{current:0},window:{clearTimeout(){},setTimeout:fn=>{callback=fn;return 1;}},searchWithDetails:async(_query,_scope,apply)=>{partial=apply;apply({entries:[{id:'a'},{id:'b'}],message:'local'});return new Promise(resolve=>finish=resolve)}});
+  c.setResults=value=>{c.results=value;c.resultsRef.current=value};
+  c.setActive=value=>{c.active=value;c.activeRef.current=value};
+  c.setMessage=value=>{c.message=value};c.setLoading=value=>{c.loading=value};
+  c.setVisibleCount=value=>{c.visibleCount=typeof value==='function'?value(c.visibleCount):value};
+  vm.runInContext(ts.transpile(`globalThis.runSearchEffect = (${searchEffect.getText(ast)});globalThis.resetSearchResults = (${resetEffect.getText(ast)});`,{target:ts.ScriptTarget.ES2022}),c);
+  let cancel=c.runSearchEffect();const pending=callback();c.setActive(1);
+  partial({entries:[{id:'c'},{id:'a'},{id:'b'}],message:'partial'});assert.equal(c.active,2);
   finish({entries:[...Array.from({length:30},(_,i)=>({id:`more-${i}`})),{id:'b'}],message:'final'});await pending;
-  assert.equal(c.results.value[c.active.value].id,'b');assert.equal(c.visibleCount.value,31);
-  c.queue(true);assert.equal(c.results.value[c.active.value].id,'b');assert.equal(c.visibleCount.value,31);
-  c.queue();assert.equal(c.active.value,0);assert.equal(c.results.value.length,0);
-  partial({entries:[{id:'stale'}],message:'stale'});assert.equal(c.results.value.length,0);
+  assert.equal(c.results[c.active].id,'b');assert.equal(c.visibleCount,31);
+  // Refresh re-runs only the search effect, retaining selection and expanded rows.
+  cancel();cancel=c.runSearchEffect();assert.equal(c.results[c.active].id,'b');assert.equal(c.visibleCount,31);
+  // A query/scope change also runs the reset effect; cancelled searches cannot repopulate it.
+  cancel();c.query='new';c.resetSearchResults();cancel=c.runSearchEffect();assert.equal(c.active,0);assert.equal(c.results.length,0);
+  partial({entries:[{id:'stale'}],message:'stale'});assert.equal(c.results.length,0);cancel();
 });
 test('only failed moves are retried, with complete errors and session history retained',async()=>{
   const m=loadMoveReports();let failing=true;const calls=[];

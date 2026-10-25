@@ -3,36 +3,30 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { test } from 'node:test';
-
-const script=readFileSync(new URL('../src/desktop/ItemTile.vue',import.meta.url),'utf8').split('<script setup lang="ts">')[1].split('</script>')[0];
-const ast=ts.createSourceFile('tile.ts',script,ts.ScriptTarget.Latest,true);
-const code=ts.transpile(ast.statements.filter(s=>!ts.isImportDeclaration(s)).map(s=>s.getText(ast)).join('\n'),{target:ts.ScriptTarget.ES2022});
-function setup(isApplication=true){
- const calls=[],selections=[],props={entry:{id:'app:shortcut:C:/Desktop/App.lnk',path:'C:/Desktop/App.lnk',isApplication,name:'App'},panelKey:'zone:work',selectionOrder:['a','b']};
- const context=vm.createContext({defineProps:()=>props,computed:fn=>({get value(){return fn();}}),ref:value=>({value}),store:{statusMessage:''},
-  selectItem:(...args)=>selections.push(args),selectPanelItems:(...args)=>selections.push(args),launchEntry:async entry=>calls.push(entry.path),window:{setTimeout(){}}});
- vm.runInContext(code,context);
- const event=patch=>({detail:1,ctrlKey:false,metaKey:false,shiftKey:false,...patch});
- return {context,calls,selections,props,event};
-}
-test('ordinary application clicks launch once and clear old selection',()=>{
- const t=setup();t.context.onSelect(t.event());assert.deepEqual(t.calls,['C:/Desktop/App.lnk']);assert.equal(t.selections[0][0],'zone:work');assert.equal(t.selections[0][1].length,0);
+const script = readFileSync(new URL('../src/desktop/ItemTile.tsx', import.meta.url), 'utf8');
+const ast = ts.createSourceFile('ItemTile.tsx', script, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const activation = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'tileActivation');
+const context = vm.createContext({});
+vm.runInContext(ts.transpile(activation.getText(ast).replace(/^export /, ''), { target: ts.ScriptTarget.ES2022 }), context);
+const event = patch => ({ detail: 1, ctrlKey: false, metaKey: false, shiftKey: false, ...patch });
+test('ordinary application clicks open while ordinary file clicks select', () => {
+ assert.equal(context.tileActivation(event(), true), 'open');
+ assert.equal(context.tileActivation(event(), false), 'select');
 });
-test('double-clicking a single-click application does not launch it twice',async()=>{
- const t=setup();t.context.onSelect(t.event());await Promise.resolve();
- t.context.onSelect(t.event({detail:2}));t.context.onOpen(t.event({detail:2}));assert.equal(t.calls.length,1);
+test('double-clicking a single-click application never opens it twice', () => {
+ assert.equal(context.tileActivation(event({ detail: 2 }), true), 'none');
+ assert.equal(context.tileActivation(event({ detail: 2 }), true, true), 'none');
 });
-test('Ctrl, Shift and Meta selections never launch an application',()=>{
- for(const key of ['ctrlKey','shiftKey','metaKey']){
-  const t=setup(),event=t.event({[key]:true});t.context.onSelect(event);t.context.onOpen(event);
-  assert.equal(t.calls.length,0);assert.equal(t.selections.length,1);assert.equal(t.selections[0][0],t.props.entry.id);
+test('Ctrl, Shift and Meta selections never launch applications', () => {
+ for (const key of ['ctrlKey', 'shiftKey', 'metaKey']) {
+  assert.equal(context.tileActivation(event({ [key]: true }), true), 'select');
+  assert.equal(context.tileActivation(event({ [key]: true }), true, true), 'none');
  }
 });
-test('regular files retain single-click selection and double-click opening',()=>{
- const t=setup(false);t.context.onSelect(t.event());assert.equal(t.calls.length,0);
- t.context.onOpen(t.event({detail:2}));assert.equal(t.calls.length,1);
+test('regular files retain double-click opening and modifier double clicks do nothing', () => {
+ assert.equal(context.tileActivation(event({ detail: 2 }), false, true), 'open');
+ assert.equal(context.tileActivation(event({ detail: 2, ctrlKey: true }), false, true), 'none');
 });
-
 const stateSource=readFileSync(new URL('../src/stores/state.ts',import.meta.url),'utf8');
 const stateAst=ts.createSourceFile('state.ts',stateSource,ts.ScriptTarget.Latest,true);
 const migration=stateAst.statements.find(s=>ts.isFunctionDeclaration(s)&&s.name?.text==='hideLegacyLauncher');

@@ -1,56 +1,11 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nestra · 桌面操作验收</title></head><body data-window="desktop"><div id="app"></div>
-<script type="module">
-// Production components with synthetic files; every IPC stays in memory.
-let disk=null,files=[],searchOpens=0,launches=[],regionCalls=0,fixtureOpenSearch;
-window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'desktop'},currentWebview:{label:'desktop'}},invoke:async(command,args)=>{
- if(command==='load_state')return structuredClone(disk);
- if(command==='save_state'){disk=structuredClone(args.state);return;}
- if(command==='scan_desktop')return structuredClone(files);
- if(command==='open_entry'){launches.push(args.target);document.querySelector('[aria-label="打开调用次数"]').textContent=`打开调用：${launches.length}`;return;}
- if(command==='list_displays')return [{id:'main',name:'验收显示器',x:0,y:0,width:1020,height:700,isPrimary:true}];
- if(command==='rename_zone_dir'){for(const file of files.filter(f=>f.zone===args.oldDir)){file.path=file.path.replace(`\\${args.oldDir}\\`,`\\${args.newDir}\\`);file.id=`file:${file.path}`;file.zone=args.newDir;}return;}
- if(command==='dissolve_zone'){let count=0;for(const file of files.filter(f=>f.zone===args.zoneDir)){file.zone=null;file.path=`C:\\fixture\\Desktop\\${file.name}`;file.id=`file:${file.path}`;count++;}return count;}
- if(command==='open_search'){searchOpens++;document.querySelector('[aria-label="搜索调用次数"]').textContent=`搜索调用：${searchOpens}`;fixtureOpenSearch();return;}
- if(command==='detect_search_provider')return {available:false,name:'fixture',message:'示例数据 · 无真实文件操作'};
- if(command==='search_mapped_folders'||command==='list_installed_apps')return [];
- if(command==='recent_launches'||command==='scan_applications')return [];
- if(command==='search_everything')return {entries:[],available:false,message:'示例数据 · 未连接 Everything'};
- if(command==='set_hit_rects'){regionCalls++;document.querySelector('[aria-label="裁剪同步次数"]')?.replaceChildren(`裁剪同步：${regionCalls}`);return;}
- if(command==='resolve_icon_pairs')return {};
- if(command==='set_mapping_watches'||command==='set_hit_rects'||command==='grant_desktop_input'||command==='release_desktop_input'||command==='plugin:event|emit')return;
- if(command==='plugin:window|scale_factor')return 1;
- throw Error(`Fixture blocked IPC: ${command}`);
-}};
-const {createApp,h,computed}=await import('vue');
-const {createRouter,createWebHashHistory}=await import('vue-router');
-const {default:ui}=await import('@nuxt/ui/vue-plugin');
-const {addCollection}=await import('@iconify/vue');
-const {icons}=await import('@iconify-json/lucide');addCollection(icons);
-await import('/src/style.css');await import('/src/product.css');
-const {default:OrganizerPanel}=await import('/src/desktop/OrganizerPanel.vue');
-const {default:LauncherPanel}=await import('/src/desktop/LauncherPanel.vue');
-const {default:StatusNotice}=await import('/src/components/StatusNotice.vue');
-const {default:FileMoveResults}=await import('/src/components/FileMoveResults.vue');
-const {default:DesktopSearch}=await import('/src/desktop/DesktopSearch.vue');
-const {default:ConfirmDialog}=await import('/src/desktop/ConfirmDialog.vue');
-const {default:SurfaceSettings}=await import('/src/desktop/SurfaceSettings.vue');
-const {default:SearchOverlay}=await import('/src/desktop/SearchOverlay.vue');
-const {store,setAppearance,DESKTOP_SEARCH_KEY,visibleDesktopPanels,itemsByPanel,openSearch,scheduleHitRectSync}=await import('/src/stores/state.ts');
-fixtureOpenSearch=()=>openSearch('');
-store.displays=[{id:'main',name:'验收显示器',x:0,y:0,width:1020,height:700,isPrimary:true}];
-store.customGroups=[{id:'work',name:'工作资料',dirName:'工作资料'},{id:'inbox',name:'待整理',dirName:'待整理'}];
-store.panels=store.customGroups.map(g=>({key:`zone:${g.id}`,groupId:g.id,title:g.name}));
-for(const [index,p] of store.panels.entries())store.panelLayouts[p.key]={x:64+index*370,y:130,width:336,height:380,zIndex:10+index,visible:true};
-store.panelLayouts[DESKTOP_SEARCH_KEY]={x:370,y:22,width:280,height:46,zIndex:12,visible:true};
-files=store.customGroups.flatMap(g=>['项目计划.docx','设计方案.pdf','会议记录.txt'].map((name,i)=>({id:`file:C:\\fixture\\Desktop\\.nestra\\${g.dirName}\\${name}`,path:`C:\\fixture\\Desktop\\.nestra\\${g.dirName}\\${name}`,name,kind:'file',launchKind:'filesystem',zone:g.dirName,glyph:['文','P','记'][i],isHidden:false,isFresh:false,isApplication:false,canManage:false,iconPath:null})));
-store.entries=structuredClone(files);store.ready=true;setAppearance({theme:'dark',surfaceMaterial:'glass',cornerStyle:'standard',borderStyle:'subtle',panelOpacity:.85});
-const application={id:'app:shortcut:C:\\fixture\\Desktop\\.nestra\\工作资料\\Code.lnk',path:'C:\\fixture\\Desktop\\.nestra\\工作资料\\Code.lnk',name:'Code',kind:'shortcut',launchKind:'filesystem',zone:'工作资料',glyph:'C',isApplication:true,isHidden:false,isFresh:false,canManage:false,iconPath:null,sourceLabel:'示例应用'};
-files.push(application);store.entries.push(structuredClone(application));
-createApp({setup(){const state=computed(()=>JSON.stringify({groups:store.customGroups,layouts:store.panelLayouts,files:store.entries.map(f=>({name:f.name,zone:f.zone,path:f.path}))}));return()=>h('div',[
- h(DesktopSearch),...visibleDesktopPanels.value.filter(panel=>panel.key!=='system:launcher').map(panel=>h(OrganizerPanel,{key:panel.key,panel,items:itemsByPanel.value[panel.key]??[]})),store.panelLayouts['system:launcher']?.visible===true?h(LauncherPanel):null,h(ConfirmDialog),h(SearchOverlay),store.surfaceSettingsKey?h(SurfaceSettings,{key:store.surfaceSettingsKey,panelKey:store.surfaceSettingsKey}):null,
- h('details',{style:'position:fixed;bottom:18px;left:24px;color:#a9b6cb;font-size:11px;max-width:80%;z-index:9000'},[h('summary','组件验收 · 示例数据'),h('output',{'aria-label':'验收数据'},state.value),h('p',{'aria-label':'搜索调用次数'},`搜索调用：${searchOpens}`),h('p',{'aria-label':'打开调用次数'},`打开调用：${launches.length}`),h('p',{'aria-label':'裁剪同步次数'},`裁剪同步：${regionCalls}`)]),
- h(FileMoveResults),!store.searchOpen||!store.statusAction?h(StatusNotice,{desktop:true}):null
-]);}}).use(createRouter({history:createWebHashHistory(),routes:[{path:'/:pathMatch(.*)*',component:{render:()=>null}}]})).use(ui).mount('#app');
-new MutationObserver(()=>scheduleHitRectSync()).observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['style','class']});scheduleHitRectSync();
-</script><style>body{background:radial-gradient(ellipse at 80% 20%,#25414d,transparent 55%),linear-gradient(145deg,#141c2b,#223447);height:100vh;overflow:hidden}</style></body></html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nestra · 桌面操作验收</title><link rel="stylesheet" href="./fixture.css"></head><body data-window="desktop"><div id="app"></div><script type="module">
+import { configuration, entry, installFixture, layout, mountFixtureApp } from './mock-native.js';
+const groups=[{id:'work',name:'工作资料',dirName:'工作资料',sourceKind:'zone'},{id:'inbox',name:'待整理',dirName:'待整理',sourceKind:'zone'}];
+const files=groups.flatMap(group=>['项目计划.docx','设计方案.pdf','会议记录.txt'].map(name=>entry(name,group.dirName)));
+const application=entry('Code.lnk','工作资料',{name:'Code',kind:'shortcut',isApplication:true,glyph:'C',sourceLabel:'示例应用'});application.id=`app:shortcut:${application.path}`;files.push(application);
+const fixture=installFixture({files,disk:configuration({customGroups:groups,appearance:{styleVersion:1,theme:'dark',surfaceMaterial:'glass',cornerStyle:'standard',borderStyle:'subtle',panelOpacity:.85},panelLayouts:{'zone:work':layout(64,130),'zone:inbox':{...layout(434,130),zIndex:11},'system:search':{...layout(370,22,280,46),zIndex:12},'system:launcher':{...layout(800,130),visible:false,launcherVisibilityMigrated:true}}})});
+const React=await import('react');const {useNestra,openSearch}=await import('/src/stores/state.ts');const h=React.createElement;
+function Controls(){const state=useNestra();const calls=command=>fixture.state.calls.filter(call=>call.command===command).length;return h('details',null,h('summary',null,'组件验收 · 示例数据'),h('output',{'aria-label':'验收数据'},JSON.stringify({groups:state.customGroups,layouts:state.panelLayouts,files:state.entries.map(file=>({name:file.name,zone:file.zone,path:file.path}))})),h('p',{'aria-label':'搜索调用次数'},`搜索调用：${calls('open_search')}`),h('p',{'aria-label':'打开调用次数'},`打开调用：${calls('open_entry')}`),h('p',{'aria-label':'裁剪同步次数'},`裁剪同步：${calls('set_hit_rects')}`),h('button',{onClick:()=>openSearch('')},'打开示例搜索'));}
+await mountFixtureApp(Controls);
+</script><style>body[data-window="desktop"]{background:radial-gradient(ellipse at 80% 20%,#25414d,transparent 55%),linear-gradient(145deg,#141c2b,#223447)}</style></body></html>

@@ -1,6 +1,7 @@
-import { computed, reactive } from 'vue';
+import { useStore } from 'zustand';
+import { createStore } from 'zustand/vanilla';
 
-interface TodoDraft {
+export interface TodoDraft {
   text: string;
   editingId: string;
   editText: string;
@@ -8,27 +9,30 @@ interface TodoDraft {
   editError: string;
 }
 
-// Unsubmitted text belongs to this WebView session, not the persisted task list.
-// Keeping it outside the component survives hiding widgets and manager navigation.
-const drafts = reactive(new Map<string, TodoDraft>());
+const emptyDraft: TodoDraft = Object.freeze({
+  text: '', editingId: '', editText: '', editingOriginal: '', editError: '',
+});
+// Draft text belongs to this WebView session. It survives navigation, but is
+// intentionally absent from the file-backed application configuration.
+const drafts = createStore<Record<string, TodoDraft>>(() => ({}));
 
-export function discardTodoDraft(widgetId: string): void {
-  drafts.delete(widgetId);
+export function getTodoDraft(widgetId: string): TodoDraft {
+  return drafts.getState()[widgetId] ?? emptyDraft;
 }
 
-export function useTodoDraft(widgetId: () => string) {
-  const draft = computed(() => {
-    const id = widgetId();
-    if (!drafts.has(id)) drafts.set(id, {
-      text: '', editingId: '', editText: '', editingOriginal: '', editError: '',
-    });
-    return drafts.get(id)!;
-  });
-  function field<K extends keyof TodoDraft>(key: K) {
-    return computed({ get: () => draft.value[key], set: (value: TodoDraft[K]) => { draft.value[key] = value; } });
-  }
-  return {
-    text: field('text'), editingId: field('editingId'), editText: field('editText'),
-    editingOriginal: field('editingOriginal'), editError: field('editError'),
-  };
+export function updateTodoDraft(widgetId: string, patch: Partial<TodoDraft>): void {
+  drafts.setState(state => ({ ...state, [widgetId]: { ...(state[widgetId] ?? emptyDraft), ...patch } }), true);
+}
+
+export function discardTodoDraft(widgetId: string): void {
+  drafts.setState(state => {
+    const next = { ...state };
+    delete next[widgetId];
+    return next;
+  }, true);
+}
+
+export function useTodoDraft(widgetId: string) {
+  const draft = useStore(drafts, state => state[widgetId] ?? emptyDraft);
+  return { draft, update: (patch: Partial<TodoDraft>) => updateTodoDraft(widgetId, patch) };
 }

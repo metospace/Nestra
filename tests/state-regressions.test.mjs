@@ -10,7 +10,7 @@ const ast = ts.createSourceFile('state.ts', source, ts.ScriptTarget.Latest, true
 const names = new Set(['snapshotFromStore', 'mergePersisted', 'equivalent', 'applyPersisted',
   'flushState', 'applyRemoteState', 'restoreConfiguration', 'zonePanelKey', 'renameCustomGroup',
   'removeCustomGroup', 'rebindMapping', 'migrateItemId', 'migratePathReferences', 'remappedId',
-  'sanitizeZoneDir', 'uniqueZoneDir', 'performFileChange', 'prepareExit', 'cancelExitPreparation', 'runStateMutation', 'isExitFrozen', 'refreshDisplays', 'recoverDesktopLayouts', 'rescan', 'createWidget', 'addCustomGroup', 'dropPaths']);
+  'sanitizeZoneDir', 'uniqueZoneDir', 'performFileChange', 'prepareExit', 'cancelExitPreparation', 'runStateMutation', 'isExitFrozen', 'refreshDisplays', 'recoverDesktopLayouts', 'rescan', 'createWidget', 'addCustomGroup', 'dropPaths', 'setAppearance']);
 const selected = ast.statements.filter(n => ts.isFunctionDeclaration(n) && names.has(n.name?.text));
 assert.equal(selected.length, names.size);
 const code = ts.transpile(selected.map(n => n.getText(ast).replace(/^export /, '')).join('\n'), { target: ts.ScriptTarget.ES2022 });
@@ -27,7 +27,7 @@ function setup() {
     store: { ready: true, entries: [], customGroups: [], tabGroups: [], panelLayouts: {}, foldedItems: {}, itemOrders: {},
       widgets: [], appearance: { styleVersion: 1, theme: 'dark', panelOpacity: .88 }, launcherIds: [], launcherReferences: {},
       launchCollections: [], startWithWindows: false, hideNativeIcons: false },
-    DEFAULT_APPEARANCE: {}, suppressPersistWatch: false, zCounter: 0, lastSynced: null,
+    DEFAULT_APPEARANCE: {}, publishState() {}, zCounter: 0, lastSynced: null,
     persistChain: Promise.resolve(), saveTimer: undefined, fileChangeDepth: 0,
     pendingStateMutations: 0, preparingExit: null, previousBodyInert: false, exitInputFrozen: false, fileMoves: { busy: false },
     document: { body: { inert: false } }, window: { clearTimeout() {}, setTimeout },
@@ -51,6 +51,35 @@ function setup() {
   return { c: context, statuses, acknowledgements, get disk() { return disk; }, set disk(value) { disk = canonical(value); }, get writes() { return writes; } };
 }
 const note = id => ({ id, kind: 'note', content: 'keep me', title: 'Note', todos: [], layout: { x: 20, y: 40, width: 310, height: 320, visible: true, zIndex: 1 } });
+
+test('light theme chosen after the one-time visual migration survives save and remote reread', async () => {
+  const t = setup(), { c } = t;
+  const legacy = plain(t.disk);
+  delete legacy.appearance.styleVersion;
+  Object.assign(legacy.appearance, { theme: 'light', surfaceMaterial: 'clear', cornerStyle: 'standard', borderStyle: 'subtle', panelOpacity: .95 });
+  t.disk = legacy; c.lastSynced = plain(legacy);
+  // Exactly the state pair restoreState establishes: migrated live state and
+  // the untouched old disk document as the three-way baseline.
+  c.applyPersisted({ ...legacy, appearance: { styleVersion: 1, theme: 'dark', surfaceMaterial: 'glass', cornerStyle: 'rounded', borderStyle: 'subtle', panelOpacity: .88 } });
+  c.setAppearance({ theme: 'light' });
+  await c.flushState(); await c.applyRemoteState(); await c.flushState();
+  assert.equal(t.disk.appearance.theme, 'light');
+  assert.equal(t.disk.appearance.styleVersion, 1);
+  assert.equal(c.store.appearance.theme, 'light');
+});
+
+test('theme changed while an older save is in flight remains light after that save completes', async () => {
+  const t = setup(), { c } = t, writeGate = gate();
+  const write = c.savePersistedState; let started = false;
+  c.savePersistedState = async (...args) => { started = true; await writeGate.promise; await write(...args); };
+  const oldSave = c.flushState(); await settle(() => started);
+  c.setAppearance({ theme: 'light' });
+  writeGate.release(); await oldSave;
+  assert.equal(c.store.appearance.theme, 'light');
+  await c.flushState(); await c.applyRemoteState();
+  assert.equal(c.store.appearance.theme, 'light');
+  assert.equal(t.disk.appearance.theme, 'light');
+});
 
 for (const change of ['add', 'modify', 'delete', 'layout']) {
   test(`queued remote ${change} while save reads cannot overwrite newer disk state`, async () => {
@@ -287,14 +316,21 @@ test('delayed native launcher drop is committed before ACK and new drops are ref
 
 test('tray event delivered after ACK cannot create unsaved notes while another window is saving; cancel restores dispatch', async () => {
   const t = setup(), { c } = t;
-  const desktopSource = readFileSync(new URL('../src/desktop/DesktopLayer.vue', import.meta.url), 'utf8').split('</script>')[0].replace('<script setup lang="ts">', '');
-  const desktopAst = ts.createSourceFile('DesktopLayer.ts', desktopSource, ts.ScriptTarget.Latest, true);
-  const tray = desktopAst.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === 'handleTrayAction');
-  vm.runInContext(ts.transpile(tray.getText(desktopAst), { target: ts.ScriptTarget.ES2022 }), c);
+  const desktopSource = readFileSync(new URL('../src/desktop/DesktopLayer.tsx', import.meta.url), 'utf8');
+  const desktopAst = ts.createSourceFile('DesktopLayer.tsx', desktopSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const handlers = [];
+  function visit(node) {
+    if (ts.isFunctionDeclaration(node) && ['whenReady', 'tray'].includes(node.name?.text)) handlers.push(node);
+    ts.forEachChild(node, visit);
+  }
+  visit(desktopAst);
+  assert.equal(handlers.length, 2);
+  c.disposed = false;
+  vm.runInContext(ts.transpile(handlers.map(node => node.getText(desktopAst)).join('\n'), { target: ts.ScriptTarget.ES2022 }), c);
   await c.prepareExit(15);
-  c.handleTrayAction('new-note'); c.createWidget('note');
+  await c.whenReady(() => c.tray('new-note')); c.createWidget('note');
   assert.equal(c.store.widgets.length, 0); assert.equal(t.disk.widgets.length, 0);
-  c.cancelExitPreparation(); c.handleTrayAction('new-note');
+  c.cancelExitPreparation(); await c.whenReady(() => c.tray('new-note'));
   assert.equal(c.store.widgets.length, 1);
 });
 

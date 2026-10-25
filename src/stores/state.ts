@@ -1,10 +1,11 @@
-/** Single reactive application store (Pinia-free by design).
+/** Application service with a single Zustand view store.
  *
  * 真收纳模型：收纳区 = Desktop\.nestra\<dirName> 的真实目录，成员资格由
  * 路径决定（entry.zone），不做 id 引用归类。拖进收纳区 = 文件真实移动，
  * 桌面图标自然消失；放回桌面 = 移回顶层。快捷启动是纯引用例外。 */
 
-import { computed, reactive, watch } from "vue";
+import { useStore } from "zustand";
+import { createStore } from "zustand/vanilla";
 import { createRefreshQueue } from "@/lib/refreshQueue";
 import { discardTodoDraft } from "@/composables/useTodoDraft";
 import { fileMoves, trackFileMoves, type MoveTask } from '@/composables/fileMoveReports';
@@ -94,7 +95,10 @@ export function nextZ(): number {
   return ++zCounter;
 }
 
-export const store = reactive({
+// The service is the only writer. Keeping its working objects stable preserves
+// native operations which retain a layout or file identity across await points.
+// Components read useNestra() and write through actions/mutateStore only.
+export const store = {
   launcherReferences: {} as Record<string, DesktopEntry>,
   launchCollections: [] as LaunchCollection[],
   clipboardEnabled: true,
@@ -130,13 +134,60 @@ export const store = reactive({
   surfaceSettingsKey: "",
   hideNativeIcons: false,
   startWithWindows: false,
-});
+};
 
-export const selectedEntries = computed(() => store.entries.filter(e => store.selectedItemIds.includes(e.id)));
+export type NestraState = typeof store;
+export const iconUrls = new Map<string, string>();
+export const mappingErrors: Record<string, string> = {};
+export const operationResults: { name: string; path: string; ok: boolean; message: string }[] = [];
+let revision = 0;
+// Scanner rows are replaced, never edited in place. Reuse their detached view
+// arrays while dragging/resizing so each pointer frame clones only UI data.
+const scanSnapshots = new WeakMap<DesktopEntry[], DesktopEntry[]>();
+function snapshotEntries(entries: DesktopEntry[]): DesktopEntry[] {
+  let snapshot = scanSnapshots.get(entries);
+  if (!snapshot) { snapshot = structuredClone(entries); scanSnapshots.set(entries, snapshot); }
+  return snapshot;
+}
+
+function viewSnapshot() {
+  // structuredClone deliberately excludes the confirmation callback. Everything
+  // rendered is a detached snapshot, so async mutations cannot tear an old render.
+  const { entries, applications, confirmRequest: _confirmation, ...mutable } = store;
+  return {
+    ...structuredClone(mutable),
+    entries: snapshotEntries(entries), applications: snapshotEntries(applications),
+    confirmRequest: store.confirmRequest ? { ...store.confirmRequest } : null,
+    iconUrls: new Map(iconUrls), mappingErrors: { ...mappingErrors },
+    operationResults: operationResults.map(result => ({ ...result })), revision,
+  };
+}
+
+const nestraStore = createStore(viewSnapshot);
+export function useNestra() { return useStore(nestraStore); }
+
+/** Publish does not save: applying a remote snapshot must never echo a write. */
+function publishState(): void {
+  revision += 1;
+  nestraStore.setState(viewSnapshot(), true);
+}
+
+/** Synchronous UI edit against the current service state, never a retained draft.
+ * Native/async operations use the named service actions instead. */
+export function mutateStore(edit: (state: NestraState) => void): void {
+  if (isExitFrozen()) return;
+  edit(store);
+  applyAppearanceToCss();
+  scheduleSave();
+  scheduleHitRectSync();
+}
+
+export function getSelectedEntries() { return store.entries.filter(e => store.selectedItemIds.includes(e.id)); }
 export function selectPanelItems(panelKey: string, ids: string[]): void {
   store.selectionPanel = panelKey;
   store.selectedItemIds = [...new Set(ids)];
   store.selectedItemId = ids.at(-1) ?? '';
+  publishState();
 }
 export function selectItem(id: string, panelKey: string, order: string[], ctrl: boolean, shift: boolean): void {
   const previous = store.selectionPanel === panelKey ? store.selectedItemIds : [];
@@ -146,6 +197,7 @@ export function selectItem(id: string, panelKey: string, order: string[], ctrl: 
     : ctrl ? previous.includes(id) ? previous.filter(v=>v!==id) : [...previous,id] : [id];
   selectPanelItems(panelKey,ids);
   if (!shift) store.selectionAnchor=id;
+  publishState();
 }
 export async function batchMoveItems(ids: string[], target: string): Promise<void> {
   return runStateMutation(async () => {
@@ -188,8 +240,6 @@ export async function batchReturnItems(ids: string[]): Promise<void> {
 
 /** 图标内存缓存：entry.path → asset URL。快照先无图标渲染，这里异步补齐
  * （两段式加载，见 AGENTS.md）。失败路径记录为 null，避免反复重试。 */
-export const iconUrls = reactive(new Map<string, string>());
-
 let iconFillTimer: number | undefined;
 let iconFillBusy = false;
 
@@ -200,7 +250,7 @@ function scheduleIconFill(): void {
 
 async function fillMissingIcons(): Promise<void> {
   if (iconFillBusy) {
-    // 上一批还在解析：这批结束后 watch 会再触发一轮。
+    // 上一批还在解析：完成后继续调度缺失图标。
     scheduleIconFill();
     return;
   }
@@ -239,6 +289,7 @@ async function fillMissingIcons(): Promise<void> {
     }
   } finally {
     iconFillBusy = false;
+    publishState();
     if (store.entries.some(entry => !iconUrls.has(entry.path) && !iconUrls.has(`null:${entry.path}`))) {
       scheduleIconFill();
     }
@@ -251,26 +302,8 @@ export function cachedIconUrl(entryPath: string): string | null {
   return url || null;
 }
 
-// 拖拽/缩放直接改 reactive layout，深度监听兜底持久化（debounce 内置），
-// 同时把可见面板的物理矩形同步给 Rust 做命中测试（空白区点击穿透）。
-// 远端套用（applyPersisted）也会改这些对象——必须抑制，否则每次套用远端
-// 快照都会触发一次回写，两个窗口之间形成保存乒乓死循环并把对方的新数据
-// 用旧快照冲掉（收纳区"建完就消失"就是这条链路）。
-let suppressPersistWatch = false;
-
-watch(
-  () => [store.panelLayouts, store.widgets],
-  () => {
-    if (suppressPersistWatch) {
-      suppressPersistWatch = false;
-      scheduleHitRectSync();
-      return;
-    }
-    scheduleSave();
-    scheduleHitRectSync();
-  },
-  { deep: true },
-);
+// There is no deep watcher or secondary persistence plugin. Local actions call
+// scheduleSave; remote application only publishes a detached Zustand snapshot.
 
 /* ------------------------------------------------------------------ */
 /* 收纳区目录名                                                         */
@@ -308,7 +341,7 @@ function groupForPanel(panel: Panel): CustomGroupDefinition | undefined {
 /* ------------------------------------------------------------------ */
 
 /** 分区内容 = 路径位于该收纳区目录下的条目（文件系统即真相）。 */
-export const itemsByPanel = computed<Record<string, DesktopEntry[]>>(() => {
+export function getItemsByPanel(): Record<string, DesktopEntry[]> {
   const result: Record<string, DesktopEntry[]> = {};
 
   for (const panel of store.panels) {
@@ -330,25 +363,25 @@ export const itemsByPanel = computed<Record<string, DesktopEntry[]>>(() => {
   }
 
   return result;
-});
+}
 
 /** 快捷启动面板的条目：按 launcherIds 的存储顺序（= 用户添加顺序）。 */
-export const launcherEntries = computed<DesktopEntry[]>(() =>
-  store.launcherIds
+export function getLauncherEntries(): DesktopEntry[] {
+  return store.launcherIds
     .map((id) => store.launcherReferences[id] ?? store.entries.find((entry) => entry.id === id) ?? referenceFromId(id))
-    .filter((entry): entry is DesktopEntry => Boolean(entry)),
-);
+    .filter((entry): entry is DesktopEntry => Boolean(entry));
+}
 
 /** 桌面层渲染所有可见面板；收纳区即使是空的也要显示（等待拖入）。 */
-export const visibleDesktopPanels = computed<Panel[]>(() =>
-  store.panels.filter(
+export function getVisibleDesktopPanels(): Panel[] {
+  return store.panels.filter(
     (panel) => store.panelLayouts[panel.key]?.visible !== false && (() => {
       const tabGroup = store.tabGroups.find((tabs) => tabs.groupIds.includes(panel.groupId));
       if (!tabGroup) return true;
       return false;
     })(),
-  ),
-);
+  );
+}
 
 export function searchResults(query: string): DesktopEntry[] {
   const needle = query.trim().toLowerCase();
@@ -399,7 +432,17 @@ export function foldedIds(panelKeyString: string): Set<string> {
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
-export async function initialize(): Promise<void> {
+let initialization: Promise<void> | undefined;
+/** Multiple React mounts share one native listener/refresh lifecycle. */
+export function initialize(): Promise<void> {
+  if (!initialization) initialization = initializeService().catch(error => {
+    initialization = undefined;
+    throw error;
+  });
+  return initialization;
+}
+
+async function initializeService(): Promise<void> {
   await restoreState();
   await recoverStorageZones();
   await syncMappingWatches();
@@ -439,10 +482,12 @@ export async function initialize(): Promise<void> {
     /* IPC 绑定失败也保持可用 */
   }
   store.ready = true;
+  publishState();
   if (launcherVisibilityChanged) scheduleSave();
   void scanApplications().then(async applications => {
     if (isExitFrozen()) return;
     store.applications = applications;
+    publishState();
     await setClipboardEnabled(store.clipboardEnabled);
   }).catch(() => showStatus("应用目录暂时不可用，可在搜索页重新刷新"));
   recoverDesktopLayouts();
@@ -500,6 +545,7 @@ async function bindIpc(): Promise<void> {
     if (event.payload === "search-manager" && label === "manager") {
       store.searchOpen = true;
     }
+    publishState();
   });
 }
 
@@ -515,7 +561,7 @@ async function runStateMutation<T>(operation: () => Promise<T>): Promise<T> {
   if (isExitFrozen()) throw new Error("正在退出，请等待保存完成");
   pendingStateMutations += 1;
   try { return await operation(); }
-  finally { pendingStateMutations -= 1; }
+  finally { pendingStateMutations -= 1; publishState(); }
 }
 
 function cancelExitPreparation(): void {
@@ -709,8 +755,7 @@ async function recoverStorageZones(): Promise<void> {
 function applyPersisted(persisted: PersistedState): void {
   // Keep mutable store data separate from the three-way merge baseline.
   persisted = JSON.parse(JSON.stringify(persisted)) as PersistedState;
-  // 远端/回写套用不是本地编辑：抑制兜底 watch 的 scheduleSave（见上方注释）。
-  suppressPersistWatch = true;
+  // Remote application only publishes; it never schedules a local save.
   // Active move/resize handlers retain these objects across asynchronous saves.
   const layouts = persisted.panelLayouts ?? {};
   for (const [key, layout] of Object.entries(layouts)) {
@@ -803,9 +848,8 @@ function applyPersisted(persisted: PersistedState): void {
   for (const widget of store.widgets) {
     zCounter = Math.max(zCounter, widget.layout?.zIndex ?? 0);
   }
+  publishState();
 }
-
-export const mappingErrors = reactive<Record<string, string>>({});
 
 async function syncMappingWatches(): Promise<void> {
   const paths = store.customGroups.flatMap((group) => group.mappedPath ? [group.mappedPath] : []);
@@ -867,6 +911,7 @@ const refreshDesktop = createRefreshQueue(scanAllEntries, (entries) => {
   ensurePanels();
   // 快照已上屏，异步补齐缺失图标（不阻塞面板渲染）。
   scheduleIconFill();
+  publishState();
 }, desktopGestureActive);
 
 export function rescan(): Promise<void> {
@@ -987,6 +1032,7 @@ function ensurePanels(): void {
   });
 
   store.panels = panels;
+  publishState();
 }
 
 /** First-run placement: flow the panels across the screen like the old
@@ -1141,6 +1187,7 @@ bindHitResizeListener();
 /* ------------------------------------------------------------------ */
 
 export function scheduleSave(): void {
+  publishState();
   if (store.persistenceBlocked) return;
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => { saveTimer = undefined; void flushState().catch(() => {}); }, 600);
@@ -1423,6 +1470,7 @@ let statusTimer: number | undefined;
 export function showStatus(message: string, action: "show-launcher" | null = null): void {
   store.statusMessage = message;
   store.statusAction = action;
+  publishState();
   if (statusTimer !== undefined) window.clearTimeout(statusTimer);
   statusTimer = undefined;
   // Keep an actionable result available until used, dismissed or replaced.
@@ -1430,6 +1478,7 @@ export function showStatus(message: string, action: "show-launcher" | null = nul
   statusTimer = window.setTimeout(() => {
     store.statusMessage = "";
     statusTimer = undefined;
+    publishState();
   }, 3000);
 }
 
@@ -1438,6 +1487,7 @@ export function dismissStatus(): void {
   statusTimer = undefined;
   store.statusMessage = "";
   store.statusAction = null;
+  publishState();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1521,7 +1571,7 @@ export async function placeItem(
     const panel = store.panels.find((candidate) => candidate.groupId === groupId);
     if (!panel || panel.groupId === "launcher") return;
 
-    const ids = (itemsByPanel.value[panel.key] ?? [])
+    const ids = (getItemsByPanel()[panel.key] ?? [])
       .map((item) => item.id)
       .filter((id) => id !== newId);
     const at = beforeId ? ids.indexOf(beforeId) : -1;
@@ -1576,7 +1626,7 @@ export async function dropPaths(paths: string[], groupId: string | null): Promis
         if (!entry) {
           try {
             entry = (await scanPaths([path]))[0];
-            if (entry) store.entries.push(entry);
+            if (entry) store.entries = [...store.entries, entry];
           } catch { showStatus("无法读取这个快捷引用，原文件未改变"); }
         }
         if (entry && !isLauncher(entry.id)) {
@@ -1639,7 +1689,7 @@ export function toggleLauncher(entryId: string): void {
 
 /** 批量启动：间隔拉起，避免同时抢占磁盘/焦点。 */
 export async function launchAll(): Promise<void> {
-  const items = launcherEntries.value;
+  const items = getLauncherEntries();
   if (items.length === 0) {
     showStatus("快捷启动还没有项目，右键收纳区磁贴即可添加");
     return;
@@ -1728,6 +1778,7 @@ export function setSurfaceAppearance(key: string, patch: NonNullable<PanelLayout
 export function openSurfaceSettings(key: string): void {
   if (!store.panelLayouts[key]) return;
   store.surfaceSettingsKey = key;
+  publishState();
   scheduleHitRectSync();
 }
 
@@ -1763,7 +1814,7 @@ export function arrangePanels(mode: "grid" | "cascade", displayId?: string): voi
   const display = store.displays.find((item) => item.id === displayId)
     ?? store.displays.find((item) => item.isPrimary)
     ?? { id: "virtual", x: 0, y: 0, width: window.innerWidth, height: window.innerHeight };
-  const panels = visibleDesktopPanels.value.filter(panel => !store.panelLayouts[panel.key]?.locked);
+  const panels = getVisibleDesktopPanels().filter(panel => !store.panelLayouts[panel.key]?.locked);
   if (!panels.length) return;
   if (mode === "cascade") {
     panels.forEach((panel, index) => {
@@ -1924,7 +1975,7 @@ export async function renameCustomGroup(id: string, name: string): Promise<void>
     if (current) current.name = name;
     ensurePanels();
     scheduleSave();
-    void rescan();
+    void rescan().catch(error => showStatus(`名称已更新，但文件列表刷新失败：${error}`));
   });
 }
 
@@ -1997,6 +2048,7 @@ export async function resetLayouts(): Promise<void> {
 export function openSearch(query = ""): void {
   store.searchOpen = true;
   store.searchQuery = query;
+  publishState();
   scheduleHitRectSync(0);
   // SearchPanel focuses its input; DesktopLayer coordinates native ownership.
 }
@@ -2004,14 +2056,16 @@ export function openSearch(query = ""): void {
 export function closeSearch(): void {
   store.searchOpen = false;
   store.searchQuery = "";
+  publishState();
   scheduleHitRectSync(0);
 }
 
 export async function setPaused(paused: boolean): Promise<void> {
   return runStateMutation(async () => {
-    store.paused = paused;
     try {
       await setPausedNative(paused);
+      store.paused = paused;
+      publishState();
     } catch (error) {
       showStatus(`无法切换桌面层：${error}`);
     }
@@ -2020,9 +2074,9 @@ export async function setPaused(paused: boolean): Promise<void> {
 
 export async function setHideNativeIcons(hide: boolean): Promise<void> {
   return runStateMutation(async () => {
-    store.hideNativeIcons = hide;
     try {
       await setHideNativeIconsNative(hide);
+      store.hideNativeIcons = hide;
       scheduleSave();
       showStatus(hide ? "已隐藏系统桌面图标" : "已显示系统桌面图标");
     } catch (error) {
@@ -2043,21 +2097,20 @@ export async function setStartWithWindows(enabled: boolean): Promise<void> {
   });
 }
 
-/** 桌面层的确认框：原生 confirm 在非激活窗口表现不可靠，且落在命中矩形外
- * 会点击穿透。管理器是普通窗口，仍用原生 confirm。 */
+/** All windows use the shared accessible confirmation component. The desktop
+ * variant additionally participates in the native keyboard/hit-region adapter. */
 export function confirmDialog(message: string): Promise<boolean> {
-  if (getCurrentWebviewWindow().label !== "desktop") {
-    return Promise.resolve(window.confirm(message));
-  }
   if (store.confirmRequest) store.confirmRequest.resolve(false);
   return new Promise((resolve) => {
     store.confirmRequest = {
       message,
       resolve: (ok) => {
         store.confirmRequest = null;
+        publishState();
         resolve(ok);
       },
     };
+    publishState();
   });
 }
 
@@ -2235,12 +2288,18 @@ export async function rebindMapping(id: string, path: string): Promise<void> {
   });
 }
 
-export const operationResults = reactive<{ name: string; path: string; ok: boolean; message: string }[]>([]);
+export function clearOperationResults(): void {
+  operationResults.splice(0);
+  publishState();
+}
+
 export async function launchEntries(entries: DesktopEntry[]): Promise<void> {
   operationResults.splice(0);
+  publishState();
   for (const entry of entries) {
     try { await launchEntry(entry); operationResults.push({ name: entry.name, path: entry.path, ok: true, message: "已请求打开" }); }
     catch (error) { operationResults.push({ name: entry.name, path: entry.path, ok: false, message: String(error) }); }
+    publishState();
     await new Promise(resolve => window.setTimeout(resolve, 120));
   }
   showStatus(`启动完成：${operationResults.filter(item => item.ok).length} 项成功，${operationResults.filter(item => !item.ok).length} 项失败`);

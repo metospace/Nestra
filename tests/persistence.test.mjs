@@ -13,7 +13,7 @@ assert.equal(functions.length, names.size);
 const code = ts.transpile(functions.map(node => node.getText(ast)).join("\n"), { target: ts.ScriptTarget.ES2022 });
 function setup() {
   const store = { panelLayouts: {}, customGroups: [], tabGroups: [], foldedItems: {}, itemOrders: {}, widgets: [], appearance: {}, launcherIds: [], startWithWindows: false, hideNativeIcons: false };
-  const context = vm.createContext({ store, DEFAULT_APPEARANCE: {}, suppressPersistWatch: false, zCounter: 0 });
+  const context = vm.createContext({ store, DEFAULT_APPEARANCE: {}, publishState() {}, zCounter: 0 });
   vm.runInContext(code, context);
   return context;
 }

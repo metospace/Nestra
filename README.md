@@ -1,7 +1,7 @@
 # Nestra (Tauri)
 
-A calm, flexible desktop organizer for Windows — rebuilt on **Tauri 2 + Vue 3**,
-UI components by [Nuxt UI](https://ui.nuxt.com) with Tailwind CSS v4.
+A calm, flexible desktop organizer for Windows — rebuilt on **Tauri 2 + React 19**,
+Source-owned [shadcn/ui Nova](https://ui.shadcn.com) components with Tailwind CSS v4.
 
 This is the Tauri port of the original WPF app (`E:\技能包\Guidesk.App`).
 
@@ -97,8 +97,8 @@ This is the Tauri port of the original WPF app (`E:\技能包\Guidesk.App`).
 ## Layout of this repo
 
 ```
-src/            Vue 前端（桌面、管理器、搜索窗口分别按需加载，共享基础模块）
-  ui/           Nuxt UI 兼容包装与桌面弹出层
+src/            React 前端（桌面、管理器、搜索窗口分别按需加载，共享基础模块）
+  components/ui/ 官方 Nova 源码与桌面弹层适配
   domain/       来源、配置与独立面板呈现规则
 src-tauri/      Rust 后端
   src/scanner.rs    桌面扫描 / .lnk 解析 / 系统入口
@@ -126,10 +126,7 @@ cargo test --lib       # Rust 文件操作及原生命中区域测试（src-taur
 原生测试使用临时文件和隐藏测试窗口；实际分辨率、缩放、Explorer 重启和
 退出后重新启动仍需使用构建后的程序验收。
 
-Lucide 图标在构建时从 `src/`、Vite 配置和已安装的 Nuxt UI 默认配置中提取，
-仅打包使用到的图标，运行时可离线显示。新增图标请保留完整的
-`i-lucide-名称` 或 `lucide:名称` 字面量，避免用字符串拼接构造图标名；
-`pnpm test` 会检查全部提取名称能否离线解析。
+Lucide 图标使用 `lucide-react` 的静态具名导入，构建时按需打包，运行时无需图标网络请求。`pnpm test` 检查所有导入图标可离线渲染；`pnpm build` 额外检查依赖白名单与单一技术栈。
 
 发布程序必须通过 Tauri CLI 构建。单独运行 `cargo build --release` 仍会使用
 `devUrl`，没有开发服务时会显示 localhost 拒绝连接；构建脚本会阻止这种发布。
@@ -140,7 +137,7 @@ Lucide 图标在构建时从 `src/`、Vite 配置和已安装的 Nuxt UI 默认�
 - 收纳区完整限制在显示器范围内；双击标题可直接改名，右键标题可重命名或删除。删除会先将文件放回桌面。
 - 顶部为独立搜索组件，可拖动并保存位置；管理器「小组件」可隐藏、恢复及定位。详见 [桌面操作调整](docs/DESKTOP_CONTROLS_20261005.md)。
 - 快捷启动默认隐藏，升级时自动隐藏一次，保留收藏入口；收纳区内应用单击启动，Ctrl/Shift 多选及拖动不会启动，普通文件仍双击打开。
-- 界面使用 Nuxt UI，桌面弹出层必须参与原生命中区域。
+- 界面使用 shadcn/ui Nova，桌面弹出层必须参与原生命中区域。技术栈约束见 [UI_STACK.md](docs/UI_STACK.md)。
 - 桌面层阻止原生标题栏重绘；命中区域同步去重并串行，仅更新新露出的区域。单栏编辑、弹窗关闭及验证范围详见 [桌面绘制修复](docs/DESKTOP_STABILITY_20261005.md)。
 - 桌面层不拦截任务栏；其他窗口正常覆盖其上。
 - 关闭管理器/桌面层只是隐藏，退出请走托盘菜单。

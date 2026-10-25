@@ -1,41 +1,9 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nestra · 待办交互验收</title></head><body data-window="manager"><div id="app"></div>
-<script type="module">
-// Production widgets; isolated synthetic tasks and memory-only persistence.
-let disk=null;
-window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'fixture'},currentWebview:{label:'fixture'}},invoke:async(command,args)=>{
- if(command==='load_state')return structuredClone(disk);
- if(command==='save_state'){disk=structuredClone(args.state);return;}
- if(command==='release_desktop_input'||command==='grant_desktop_input')return;
- throw Error(`Fixture blocked IPC: ${command}`);
-}};
-const {createApp,h,computed}=await import('vue');
-const {createRouter,createWebHashHistory}=await import('vue-router');
-const {default:ui}=await import('@nuxt/ui/vue-plugin');
-const {addCollection}=await import('@iconify/vue');
-const {icons}=await import('@iconify-json/lucide');addCollection(icons);
-await import('/src/style.css');await import('/src/product.css');
-const {default:WidgetFrame}=await import('/src/desktop/WidgetFrame.vue');
-const {store,setAppearance,touchWidget}=await import('/src/stores/state.ts');
-const layout=x=>({x,y:90,width:330,height:370,zIndex:10,visible:true});
-store.widgets=[{id:'tasks',kind:'todo',title:'今天要做的事',content:'',todos:[
- {id:'review',text:'准备新版界面的评审资料',completed:false},
- {id:'files',text:'整理项目文件',completed:false},
- {id:'notes',text:'把会议记录发给团队，确认每一项后续工作的负责人',completed:false},
- {id:'check',text:'检查安装包',completed:false},
- {id:'done',text:'完成桌面收纳区调整',completed:true},
-],layout:layout(40),createdAt:1},{id:'empty',kind:'todo',title:'随手记一件事',content:'',todos:[],layout:layout(420),createdAt:1}];
-store.ready=true;setAppearance({theme:'light',surfaceMaterial:'glass',cornerStyle:'standard',borderStyle:'subtle',panelOpacity:.95});
-createApp({setup(){const state=computed(()=>JSON.stringify(store.widgets));return()=>h('div',[
- h('div',{style:'padding:20px;display:flex;align-items:center;gap:14px;font-size:12px'},[
- h('strong','待办交互验收 · 示例数据'),
- h('button',{onClick:()=>setAppearance({theme:store.appearance.theme==='dark'?'light':'dark'})},'切换主题'),
- h('button',{onClick:()=>Object.assign(store.widgets[0].layout,{width:220,height:150})},'最小尺寸'),
- h('button',{onClick:()=>Object.assign(store.widgets[0].layout,{width:330,height:370})},'恢复大小'),
- h('button',{onClick:()=>{for(let i=0;i<12;i++)store.widgets[0].todos.push({id:crypto.randomUUID(),text:`新增示例任务 ${i+1}`,completed:false});touchWidget()}},'添加大量任务'),
- h('button',{onClick:()=>{const task=store.widgets[0].todos.find(t=>t.id==='review');if(task)task.text='另一窗口更新了任务内容'}},'模拟远端编辑'),
- ]),
- ...store.widgets.map(widget=>h(WidgetFrame,{key:widget.id,widget})),
- h('output',{'aria-label':'验收数据',style:'position:fixed;bottom:10px;left:20px;max-width:95%;font:10px monospace;overflow-wrap:anywhere'},state.value)
-]);}}).use(createRouter({history:createWebHashHistory(),routes:[{path:'/:pathMatch(.*)*',component:{render:()=>null}}]})).use(ui).mount('#app');
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nestra · 待办交互验收</title><link rel="stylesheet" href="./fixture.css"></head><body data-window="desktop"><div id="app"></div><script type="module">
+import { configuration, installFixture, layout, mountFixtureApp } from './mock-native.js';
+const widgets=[{id:'tasks',kind:'todo',title:'今天要做的事',content:'',todos:[{id:'review',text:'准备新版界面的评审资料',completed:false},{id:'files',text:'整理项目文件',completed:false},{id:'notes',text:'把会议记录发给团队，确认每一项后续工作的负责人',completed:false},{id:'check',text:'检查安装包',completed:false},{id:'done',text:'完成桌面收纳区调整',completed:true}],layout:layout(40,90,330,370),createdAt:1},{id:'empty',kind:'todo',title:'随手记一件事',content:'',todos:[],layout:layout(420,90,330,370),createdAt:1}];
+const fixture=installFixture({disk:configuration({widgets,customGroups:[{id:'fixture',name:'验收视图',dirName:'验收视图',sourceKind:'zone'}],panelLayouts:{...configuration().panelLayouts,'zone:fixture':{...layout(800,90),visible:false}}})});
+const React=await import('react');const {useNestra,setAppearance,mutateStore,flushState}=await import('/src/stores/state.ts');const h=React.createElement;
+function Controls(){const state=useNestra();return h('div',null,h('strong',null,'待办交互验收 · 示例数据'),h('button',{onClick:()=>setAppearance({theme:state.appearance.theme==='dark'?'light':'dark'})},'切换主题'),h('button',{onClick:()=>mutateStore(store=>Object.assign(store.widgets[0].layout,{width:220,height:150}))},'最小尺寸'),h('button',{onClick:()=>mutateStore(store=>Object.assign(store.widgets[0].layout,{width:330,height:370}))},'恢复大小'),h('button',{onClick:()=>mutateStore(store=>{for(let i=0;i<12;i++)store.widgets[0].todos.push({id:crypto.randomUUID(),text:`新增示例任务 ${i+1}`,completed:false});})},'添加大量任务'),h('button',{onClick:async()=>{await flushState();const task=fixture.state.disk.widgets[0].todos.find(task=>task.id==='review');if(task)task.text='另一窗口更新了任务内容';fixture.emit('nestra://state-changed','manager');}},'模拟远端编辑'),h('details',null,h('summary',null,'验收数据'),h('output',{'aria-label':'验收数据'},JSON.stringify(state.widgets))));}
+await mountFixtureApp(Controls);
 </script></body></html>

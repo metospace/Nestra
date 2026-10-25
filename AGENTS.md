@@ -17,8 +17,8 @@
   禁止并发 invoke `save_state`（后一次覆盖前一次）。
 - 加载快照时清理幽灵数据：`foldedItems` / `itemOrders` / `launcherIds`
   中指向已不存在条目的记录要剪掉。
-- **禁止在远端套用路径里触发回写**：`applyPersisted` 必须置
-  `suppressPersistWatch`，否则 deep watch → scheduleSave → emit →
+- **禁止在远端套用路径里触发回写**：`applyPersisted` 必须保留
+  `suppressPersistWatch`，远端仅发布 Zustand 快照，不得 scheduleSave → emit →
   对方再套用再回写，两个窗口形成保存乒乓死循环，旧快照会随机冲掉
   新数据（"收纳区建完就消失"的根因）。
 - **跨窗口写入必须三方合并**：`scheduleSave` 落盘前先读磁盘，用
@@ -109,6 +109,14 @@
   浮在壁纸上；开启隐藏 = 全盘接管模式。
 
 ## 相关验证
+
+- 前端统一 React、shadcn/ui Radix Nova、Lucide、Motion、react-resizable-panels、
+  dnd-kit 和 Zustand。库职责及源码升级规则见 `docs/UI_STACK.md`。
+- 组件只能调用命名业务 action 或 `mutateStore` 修改业务状态，禁止直接修改
+  `useNestra()` 快照。异步服务完成、IPC 回调和定时器必须发布新快照；发布不等于保存。
+- 通用组件与行为复用 `src/components/ui`，不要另造选择器、对话框、焦点陷阱或拖拽传感器。
+- 桌面 Portal 必须保留 `.nestra-hit`、键盘输入标记与透明输入平面；输入平面只能在
+  Content 实际连接文档时出现，不能让关闭状态的 Select 拦截整个桌面。
 
 - 改 Rust 后：`cargo check`（src-tauri 下）
 - 改前端后：`pnpm build`

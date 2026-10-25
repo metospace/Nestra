@@ -12,6 +12,8 @@ export type ResizeDirection =
 interface SurfaceConstraints {
   minWidth?: number;
   minHeight?: number;
+  /** React/Zustand callers commit geometry instead of mutating a render snapshot. */
+  commit?: (layout: Partial<PanelLayout>) => void;
 }
 
 const DEFAULT_MIN_W = 260;
@@ -29,9 +31,10 @@ function clamp(value: number, min: number, max: number): number {
 /** Moves the whole surface inside a connected display. */
 export function startMove(
   event: PointerEvent,
-  layout: PanelLayout,
+  original: PanelLayout,
   constraints: SurfaceConstraints = {},
 ): void {
+  const layout = constraints.commit ? { ...original } : original;
   if (event.button !== 0 || layout.locked) return;
   const originX = event.clientX;
   const originY = event.clientY;
@@ -52,6 +55,7 @@ export function startMove(
       layout.monitorBounds = { x: display.x, y: display.y };
     }
     delete layout.displacedFrom;
+    constraints.commit?.(placementPatch(layout));
   };
 
   attachGesture(event, onMove);
@@ -61,9 +65,10 @@ export function startMove(
 export function startResize(
   event: PointerEvent,
   direction: ResizeDirection,
-  layout: PanelLayout,
+  original: PanelLayout,
   constraints: SurfaceConstraints = {},
 ): void {
+  const layout = constraints.commit ? { ...original } : original;
   if (event.button !== 0 || layout.locked) return;
   const originX = event.clientX;
   const originY = event.clientY;
@@ -110,9 +115,16 @@ export function startResize(
       layout.monitorBounds = { x: display.x, y: display.y };
     }
     delete layout.displacedFrom;
+    constraints.commit?.(placementPatch(layout));
   };
 
   attachGesture(event, onMove);
+}
+
+/** Do not overwrite z-order, appearance or visibility from a stale React snapshot. */
+function placementPatch(layout: PanelLayout): Partial<PanelLayout> {
+  return { x: layout.x, y: layout.y, width: layout.width, height: layout.height,
+    monitorId: layout.monitorId, monitorBounds: layout.monitorBounds, displacedFrom: layout.displacedFrom };
 }
 
 function attachGesture(

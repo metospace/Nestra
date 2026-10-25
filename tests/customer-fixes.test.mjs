@@ -12,23 +12,22 @@ const draftModule = { exports: {} };
 vm.runInNewContext(transpile(readFileSync(new URL('../src/composables/useTodoDraft.ts', import.meta.url), 'utf8')), {
   require: createRequire(import.meta.url), module: draftModule, exports: draftModule.exports,
 });
-const { useTodoDraft, discardTodoDraft } = draftModule.exports;
+const { getTodoDraft, updateTodoDraft, discardTodoDraft } = draftModule.exports;
 
 test('returning to a widget restores unsubmitted text and its original conflict baseline', () => {
-  const first = useTodoDraft(() => 'navigation-test');
-  first.text.value = 'new task draft';
-  first.editingId.value = 'task';
-  first.editText.value = 'my edited text';
-  first.editingOriginal.value = 'text before remote edit';
+  const first = getTodoDraft('navigation-test');
+  updateTodoDraft('navigation-test', { text: 'new task draft', editingId: 'task',
+    editText: 'my edited text', editingOriginal: 'text before remote edit' });
   // A new consumer represents the editor remounting after navigation or hiding.
-  const returned = useTodoDraft(() => 'navigation-test');
-  assert.equal(returned.text.value, 'new task draft');
-  assert.equal(returned.editingId.value, 'task');
-  assert.equal(returned.editText.value, 'my edited text');
-  assert.equal(returned.editingOriginal.value, 'text before remote edit');
-  assert.equal(useTodoDraft(() => 'other-widget').editText.value, '');
+  const returned = getTodoDraft('navigation-test');
+  assert.equal(first.text, ''); // a previous render remains immutable
+  assert.equal(returned.text, 'new task draft');
+  assert.equal(returned.editingId, 'task');
+  assert.equal(returned.editText, 'my edited text');
+  assert.equal(returned.editingOriginal, 'text before remote edit');
+  assert.equal(getTodoDraft('other-widget').editText, '');
   discardTodoDraft('navigation-test');
-  assert.equal(useTodoDraft(() => 'navigation-test').editingId.value, '');
+  assert.equal(getTodoDraft('navigation-test').editingId, '');
 });
 
 function declarations(path, names) {
@@ -49,7 +48,7 @@ function launcherTest() {
     panelLayouts: { 'system:launcher': layout }, launcherReferences: {}, launcherIds: [], paused: false,
     displays: [{ id: 'main', x: 0, y: 0, width: 1920, height: 1080, isPrimary: true }],
   };
-  const context = vm.createContext({runStateMutation: fn => fn(), isExitFrozen: () => false,
+  const context = vm.createContext({publishState() {}, runStateMutation: fn => fn(), isExitFrozen: () => false,
     exports: {}, store, statusTimer: undefined, LAUNCHER_PANEL_KEY: 'system:launcher',
     scheduleSave: () => saves++, scheduleHitRectSync: () => hitSyncs++, ensureLauncherLayout() {},
     nextZ: () => ++zIndex,

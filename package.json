@@ -7,30 +7,39 @@
   "scripts": {
     "test": "node scripts/test.mjs",
     "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
+    "build": "node scripts/check-ui-stack.mjs && tsc --noEmit && vite build",
+    "check:ui": "node scripts/check-ui-stack.mjs",
     "build:app": "tauri build",
     "build:app:portable": "tauri build --no-bundle",
     "preview": "vite preview",
     "tauri": "tauri"
   },
   "dependencies": {
-    "@iconify-json/lucide": "^1.2.138",
-    "@iconify/vue": "^5.0.3",
-    "@nuxt/ui": "^4.11.3",
     "@tauri-apps/api": "^2.9.0",
     "@tauri-apps/plugin-global-shortcut": "^2.3.1",
     "@tauri-apps/plugin-opener": "^2.5.2",
-    "vue": "^3.5.44",
-    "vue-router": "^4.6.4"
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zustand": "^5.0.0",
+    "lucide-react": "^0.577.0",
+    "motion": "^12.0.0",
+    "radix-ui": "^1.4.0",
+    "@dnd-kit/core": "6.3.1",
+    "@radix-ui/react-compose-refs": "1.1.5",
+    "react-resizable-panels": "4.15.0",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "tailwind-merge": "^3.0.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2.11.4",
-    "@vitejs/plugin-vue": "^6.0.3",
+    "@vitejs/plugin-react": "4.7.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
     "tailwindcss": "^4.3.3",
     "typescript": "~5.8.3",
-    "vite": "^7.3.7",
-    "vue-tsc": "^3.2.2"
+    "vite": "^7.3.7"
   },
   "packageManager": "pnpm@10.23.0+sha512.21c4e5698002ade97e4efe8b8b4a89a8de3c85a37919f957e7a0f30f38fbc5bbdd05980ffe29179b2fb6e6e691242e098d945d1601772cad0fef5fb6411e2a4b",
   "pnpm": {
