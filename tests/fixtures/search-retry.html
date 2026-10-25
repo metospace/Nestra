@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nestra · 搜索重试验收</title></head><body data-window="search"><div id="app"></div><script type="module">
+// Synthetic read-only search responses; no native calls or personal file paths.
+import { configuration, entry, installFixture, mountFixtureApp } from './mock-native.js';
+let attempted=false;
+installFixture({label:'search',disk:configuration(),commands:{
+  everything_status:()=>({installed:true,running:true,installPath:'D:\\Apps\\Everything\\Everything.exe',defaultInstallDir:'D:\\Apps\\Everything',phase:'ready',downloadedBytes:0,totalBytes:null,message:'Everything 已运行'}),
+  search_everything:({query})=>{
+    if(!query.trim())return {available:true,message:'Everything 已连接 · 输入关键词搜索索引',total:0,entries:[]};
+    if(!attempted){attempted=true;return {available:false,message:'Everything 查询超时，索引可能正在加载',total:0,entries:[]};}
+    return {available:true,message:'Everything · 已索引的磁盘文件',total:1,entries:[entry('纵横资料.pdf',null,{id:'file:D:\\fixture\\纵横资料.pdf',path:'D:\\fixture\\纵横资料.pdf',sourceLabel:'Everything'})]};
+  },
+}});
+await mountFixtureApp();
+</script></body></html>

@@ -38,7 +38,8 @@ test("Everything-only scope never presents desktop fallback as index results", a
     throw new Error("IPC unavailable");
   } }));
   assert.equal(result.entries.length, 0);
-  assert.match(result.message, /请启动 Everything/);
+  assert.match(result.message, /重试查询/);
+  assert.equal(result.indexAvailable, false);
 });
 
 test("unavailable index leaves recursive mapped search usable with explicit limited scope", async () => {

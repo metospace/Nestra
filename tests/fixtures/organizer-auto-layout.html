@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nestra · 自动布局验收</title><link rel="stylesheet" href="./fixture.css"></head><body data-window="desktop"><div id="app"></div><script type="module">
+import { configuration, entry, installFixture, layout, mountFixtureApp } from './mock-native.js';
+const names=['DBX','HBuilder X','Apipost','IntelliJ IDEA','Navicat Premium','Visual Studio Code'];
+function files(count){return Array.from({length:count},(_,i)=>entry(names[i%names.length]+(i>=6?` ${i+1}`:''),'开发',{isApplication:true,glyph:['DB','H','A','IJ','N','VS'][i%6]}));}
+const group={id:'development',name:'开发',dirName:'开发',sourceKind:'zone'};
+const fixture=installFixture({disk:configuration({customGroups:[group],panelLayouts:{...configuration().panelLayouts,'zone:development':{...layout(36,60,336,240),columns:4,iconSize:64,itemGap:12,labelLines:2}}}),files:files(6),commands:{
+  list_displays:()=>[{id:'main',name:'验收显示器',x:0,y:0,width:innerWidth,height:innerHeight,isPrimary:true}],
+  resolve_icon_pairs:({pairs})=>Object.fromEntries(pairs.map(([path],i)=>[path,'data:image/svg+xml,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" rx="14" fill="${['#2864cb','#24914a','#ee9208','#252a34','#b69a29','#2486ad'][i%6]}"/><text x="32" y="41" text-anchor="middle" font-size="24" font-family="sans-serif" fill="white">${['DB','H','A','IJ','N','VS'][i%6]}</text></svg>`)])),
+}});
+const React=await import('react'),{rescan,mutateStore,setPanelPresentation,useNestra}=await import('/src/stores/state.ts'),h=React.createElement;
+function Controls(){const state=useNestra();return h('details',null,h('summary',null,'自动布局验收（内存数据）'),h('button',{onClick:()=>{fixture.state.files=files(6);void rescan();}},'6 个应用'),h('button',{onClick:()=>{fixture.state.files=files(200);void rescan();}},'200 个应用'),h('button',{onClick:()=>mutateStore(s=>{s.displays=[{id:'main',name:'小屏',x:0,y:0,width:640,height:480,isPrimary:true}];})},'模拟小屏'),h('button',{onClick:()=>setPanelPresentation('zone:development',{iconSize:64,labelLines:3,itemGap:24})},'大间距三行名称'),h('button',{onClick:()=>setPanelPresentation('zone:development',{viewMode:'list'})},'列表模式'),h('output',{'aria-label':'布局尺寸'},JSON.stringify(state.panelLayouts['zone:development'])));}
+await mountFixtureApp(Controls);
+</script><style>.fixture-controls{left:auto;right:14px;bottom:8px;width:220px;max-height:150px}.fixture-controls summary{cursor:pointer}</style></body></html>

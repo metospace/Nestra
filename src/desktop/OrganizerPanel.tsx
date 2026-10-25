@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, CheckCheck, Ellipsis, EyeOff, FolderCog, History, ListChecks, Pencil, RefreshCw, Search, SlidersHorizontal, Trash2, UnfoldVertical, X } from 'lucide-react';
+import { Check, CheckCheck, ChevronLeft, ChevronRight, Ellipsis, EyeOff, FolderCog, History, ListChecks, Pencil, RefreshCw, Search, SlidersHorizontal, Trash2, UnfoldVertical, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent, DropdownMenuRadioGroup, DropdownMenuRadioItem } from '@/components/ui/dropdown-menu';
 import { startMove } from '@/composables/useSurfaceDrag';
 import { useItemDrop } from '@/composables/useItemDrag';
+import { useOrganizerLayout } from '@/composables/useOrganizerLayout';
 import { useFileMoves, openMoveResults } from '@/composables/fileMoveReports';
 import { surfaceAppearance } from '@/domain/presentation';
 import { dropDescription, sourceFor } from '@/domain/sources';
@@ -14,7 +15,7 @@ import { showManager } from '@/lib/tauri';
 import { batchMoveItems, batchReturnItems, bringToFront, confirmDialog, getItemsByPanel, getSelectedEntries, openSurfaceSettings, pinEntry, removeCustomGroup, removeTabGroup, renameCustomGroup, renameTabGroup, rescan, selectPanelItems, setActiveTab, setPanelVisible, showStatus, store, toggleFoldVisibility, updateGroupView, updateLayout, useNestra } from '@/stores/state';
 import type { CustomGroupDefinition, DesktopEntry, Panel } from '@/types';
 import ItemTile from './ItemTile';
-import { IconButton, ResizeHandles, surfaceStyle } from './SurfaceChrome';
+import { IconButton, surfaceStyle } from './SurfaceChrome';
 
 export default function OrganizerPanel({ panel: rootPanel, items: initialItems }: { panel: Panel; items: DesktopEntry[] }) {
   const state = useNestra(), fileMoves = useFileMoves();
@@ -30,10 +31,16 @@ export default function OrganizerPanel({ panel: rootPanel, items: initialItems }
   const [searchVisible, setSearchVisible] = useState(false), searchInput = useRef<HTMLInputElement>(null);
   const [more, setMore] = useState(false), [renaming, setRenaming] = useState(false), [nameDraft, setNameDraft] = useState(''), [renameBusy, setRenameBusy] = useState(false), nameInput = useRef<HTMLInputElement>(null);
   const [batchBusy, setBatchBusy] = useState(false), [showFolded, setShowFolded] = useState(false);
+  const [page, setPage] = useState(0);
   const [selectionBox, setSelectionBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null), disposeBox = useRef<(() => void) | undefined>(undefined);
   const filtered = items.filter(entry => matchesFilter(entry, aggregate ? aggregateFilter : activeGroup?.filter) && entry.name.toLowerCase().includes(localQuery.toLowerCase()));
   const foldedIds = new Set(state.foldedItems[panel.key] ?? []), foldedEntries = filtered.filter(entry => foldedIds.has(entry.id));
   const visibleEntries = showFolded ? filtered : filtered.filter(entry => !foldedIds.has(entry.id));
+  const sizingCount = localQuery ? items.filter(entry => matchesFilter(entry, aggregate ? aggregateFilter : activeGroup?.filter) && (showFolded || !foldedIds.has(entry.id))).length : visibleEntries.length;
+  const { rootRef, contentRef, fit } = useOrganizerLayout(layout, sizingCount, state.displays);
+  const pageSize = fit?.pageSize ?? 1, pageCount = Math.max(1, Math.ceil(visibleEntries.length / pageSize));
+  const currentPage = Math.min(page, pageCount - 1), pageEntries = visibleEntries.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+  const foldedPreviewCount = Math.max(0, Math.floor(((fit?.layout.width ?? 264) - 106) / 48));
   const selected = state.selectionPanel === panel.key ? getSelectedEntries().filter(entry => visibleEntries.some(visible => visible.id === entry.id)) : [];
   const writable = Boolean(activeGroup && sourceFor(activeGroup).writable), dropLabel = activeGroup ? dropDescription(activeGroup) : '全部来源只供浏览；请选择一个可接收文件的来源';
   const drop = useItemDrop(`zone:${rootPanel.key}`, { groupId: activeGroup?.id, mode: writable ? 'move' : 'blocked', label: dropLabel });
@@ -47,7 +54,13 @@ export default function OrganizerPanel({ panel: rootPanel, items: initialItems }
   useEffect(() => { if (renaming) { nameInput.current?.focus(); nameInput.current?.select(); } }, [renaming]);
   useEffect(() => { if (searchVisible) searchInput.current?.focus(); }, [searchVisible]);
   useEffect(() => () => disposeBox.current?.(), []);
-  if (!layout) return null;
+  useEffect(() => { setPage(0); }, [localQuery, activeGroup?.id, aggregateFilter, showFolded]);
+  useEffect(() => {
+    if (!layout || !fit) return;
+    const { x, y, width, height } = fit.layout;
+    if (layout.x !== x || layout.y !== y || layout.width !== width || layout.height !== height) updateLayout(rootPanel.key, { x, y, width, height });
+  }, [fit?.layout.x, fit?.layout.y, fit?.layout.width, fit?.layout.height, layout?.x, layout?.y, layout?.width, layout?.height, rootPanel.key]);
+  if (!layout || !fit) return null;
   const appearance = surfaceAppearance(layout, state.appearance);
   function beginRename() { if ((!rootGroup && !tabModel) || renameBusy) return; setMore(false); setNameDraft(tabModel?.name ?? rootGroup!.name); setRenaming(true); }
   async function saveName() {
@@ -76,10 +89,10 @@ export default function OrganizerPanel({ panel: rootPanel, items: initialItems }
     function end() { document.body.classList.remove('is-gesturing'); setSelectionBox(null); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); window.removeEventListener('pointercancel', end); window.removeEventListener('blur', end); if (root.hasPointerCapture(pointerId)) root.releasePointerCapture(pointerId); disposeBox.current = undefined; }
     disposeBox.current = end; selectPanelItems(panel.key, original); root.setPointerCapture(pointerId); window.addEventListener('pointermove', move); window.addEventListener('pointerup', end); window.addEventListener('pointercancel', end); window.addEventListener('blur', end);
   }
-  return <section ref={drop.setNodeRef} className={`nestra-panel is-draggable ${drop.isOver ? 'is-drop-target' : ''}`} data-group-id={activeGroup?.id} data-drop-label={dropLabel} data-drop-mode={writable ? 'move' : 'blocked'} data-material={appearance.surfaceMaterial} data-border={appearance.borderStyle} style={surfaceStyle(layout, state.appearance)} onPointerDown={() => bringToFront(rootPanel.key)}>
+  return <section ref={element => { rootRef.current = element; drop.setNodeRef(element); }} className={`nestra-panel organizer-auto-layout is-draggable ${drop.isOver ? 'is-drop-target' : ''}`} data-group-id={activeGroup?.id} data-drop-label={dropLabel} data-drop-mode={writable ? 'move' : 'blocked'} data-material={appearance.surfaceMaterial} data-border={appearance.borderStyle} style={surfaceStyle(fit.layout, state.appearance)} onPointerDown={() => bringToFront(rootPanel.key)}>
     <header className="panel-header organizer-heading select-none" onPointerDown={event => {
       if (renaming || (event.target as HTMLElement).closest('button,input,[role="tab"]')) return;
-      bringToFront(rootPanel.key); startMove(event as unknown as PointerEvent, layout, { minWidth: 264, minHeight: 176, commit: value => updateLayout(rootPanel.key, value) });
+      bringToFront(rootPanel.key); startMove(event as unknown as PointerEvent, fit.layout, { minWidth: 264, minHeight: 176, commit: value => updateLayout(rootPanel.key, value) });
     }} onDoubleClick={event => { if (!(event.target as HTMLElement).closest('button,input')) beginRename(); }} onContextMenu={event => { event.preventDefault(); setMore(true); }}>
       {renaming ? <><Input ref={nameInput} value={nameDraft} onChange={event => setNameDraft(event.target.value)} aria-label="收纳区名称" className="h-7 min-w-0 flex-1" disabled={renameBusy} onPointerDown={event => event.stopPropagation()} onKeyDown={event => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === 'Enter') { event.preventDefault(); void saveName(); } if (event.key === 'Escape' && !renameBusy) setRenaming(false); }} /><IconButton aria-label="保存名称" disabled={renameBusy || !nameDraft.trim()} onClick={() => void saveName()}><Check /></IconButton><IconButton aria-label="取消重命名" disabled={renameBusy} onClick={() => setRenaming(false)}><X /></IconButton></> : <>
         <div className="organizer-title" title="双击重命名 · 右键更多操作"><h2>{tabModel?.name ?? panel.title}</h2></div>
@@ -109,12 +122,12 @@ export default function OrganizerPanel({ panel: rootPanel, items: initialItems }
     {searchVisible && <div className="organizer-search"><Input ref={searchInput} value={localQuery} onChange={event => setLocalQuery(event.target.value)} placeholder="搜索此栏中的文件…" aria-label="搜索此栏中的文件" className="h-8" onPointerDown={event => event.stopPropagation()} onKeyDown={event => { if (event.key === 'Escape') { setSearchVisible(false); setLocalQuery(''); } }} /><IconButton aria-label="关闭栏内搜索" onClick={() => { setSearchVisible(false); setLocalQuery(''); }}><X /></IconButton></div>}
     {selected.length > 1 && <div className="organizer-selection"><span>已选 {selected.length} 项</span><Button size="sm" variant="ghost" disabled={batchBusy} onClick={() => { selected.forEach(pinEntry); showStatus('已添加快捷引用，文件未移动'); }}>固定</Button><Button size="sm" variant="ghost" disabled={batchBusy} onClick={() => setMore(true)}>移动到…</Button>{selected.some(entry => entry.zone) && <Button size="sm" variant="ghost" disabled={batchBusy} onClick={() => void returnSelected()}>放回桌面</Button>}<IconButton aria-label="清除选择" onClick={() => selectPanelItems(panel.key, [])}><X /></IconButton></div>}
     {state.mappingErrors[panel.groupId] && <p role="status" className="px-3 pb-2 text-xs text-amber-600">{state.mappingErrors[panel.groupId]}</p>}
-    {foldedEntries.length > 0 && !showFolded && <div ref={foldedDrop.setNodeRef} className="fold-strip" data-fold-target title="拖到分区或桌面上即可取出">{foldedEntries.map(entry => <ItemTile key={entry.id} entry={entry} compact folded panelKey={panel.key} />)}</div>}
-    <div className={`organizer-content min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-2 ${selected.length > 1 ? 'has-selection' : ''}`} onPointerDown={startBox}>
-      {visibleEntries.length > 0 ? <div className={`items-layout surface-item-grid ${layout.viewMode === 'list' ? 'is-list' : ''}`} style={{ gridTemplateColumns: layout.viewMode === 'list' ? '1fr' : `repeat(${layout.columns ?? 4}, minmax(0, 1fr))` }}>{visibleEntries.map(entry => <ItemTile key={entry.id} entry={entry} folded={foldedIds.has(entry.id)} panelKey={panel.key} list={layout.viewMode === 'list'} selectionOrder={visibleEntries.map(item => item.id)} />)}</div> : <div className="empty-hint"><p>{items.length && !filtered.length ? '没有符合条件的项目' : foldedEntries.length ? '项目都已折叠' : activeGroup?.mappedPath ? '文件夹为空' : '空收纳区'}</p><small>{writable ? '拖入文件会移动到此目录' : '选择其他来源，或调整筛选条件'}</small></div>}
+    {foldedEntries.length > 0 && !showFolded && <div ref={foldedDrop.setNodeRef} className="fold-strip" data-fold-target title="拖到分区或桌面上即可取出">{foldedEntries.slice(0, foldedPreviewCount).map(entry => <ItemTile key={entry.id} entry={entry} compact folded panelKey={panel.key} />)}{foldedEntries.length > foldedPreviewCount && <Button variant="ghost" size="sm" aria-label="展开全部折叠项目" onClick={() => setShowFolded(true)}>+{foldedEntries.length - foldedPreviewCount}</Button>}</div>}
+    <div ref={contentRef} className={`organizer-content min-h-0 flex-1 overflow-hidden p-2 ${selected.length > 1 ? 'has-selection' : ''}`} onPointerDown={startBox}>
+      {visibleEntries.length > 0 ? <div className={`items-layout surface-item-grid ${layout.viewMode === 'list' ? 'is-list' : ''}`} style={{ gridTemplateColumns: `repeat(${fit.columns}, minmax(0, 1fr))`, gridAutoRows: `${fit.tileHeight}px` }}>{pageEntries.map(entry => <ItemTile key={entry.id} entry={entry} folded={foldedIds.has(entry.id)} panelKey={panel.key} list={layout.viewMode === 'list'} selectionOrder={visibleEntries.map(item => item.id)} />)}</div> : <div className="empty-hint"><p>{items.length && !filtered.length ? '没有符合条件的项目' : foldedEntries.length ? '项目都已折叠' : activeGroup?.mappedPath ? '文件夹为空' : '空收纳区'}</p><small>{writable ? '拖入文件会移动到此目录' : '选择其他来源，或调整筛选条件'}</small></div>}
     </div>
+    {fit.pageCount > 1 && <nav data-organizer-pages className="organizer-pages" aria-label={`${panel.title}项目分页`}><Button size="icon-xs" variant="ghost" aria-label="上一页项目" disabled={currentPage === 0} onClick={() => setPage(value => Math.max(0, value - 1))}><ChevronLeft/></Button><span>{currentPage + 1} / {pageCount} 页 · {visibleEntries.length} 项</span><Button size="icon-xs" variant="ghost" aria-label="下一页项目" disabled={currentPage >= pageCount - 1} onClick={() => setPage(value => Math.min(pageCount - 1, value + 1))}><ChevronRight/></Button></nav>}
     {selectionBox && <div className="selection-box" style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} />}
-    <ResizeHandles layout={layout} commit={value => updateLayout(rootPanel.key, value)} onStart={() => bringToFront(rootPanel.key)} />
   </section>;
 }
 

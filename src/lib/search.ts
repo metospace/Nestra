@@ -1,7 +1,7 @@
 import type { DesktopEntry, EverythingSearchResponse } from "@/types";
 
 export type SearchScope = "all" | "everything" | "desktop" | "zones" | "mappings" | "applications";
-export interface SearchResult { entries: DesktopEntry[]; message: string }
+export interface SearchResult { entries: DesktopEntry[]; message: string; indexAvailable?: boolean }
 
 interface SearchSources {
   local: DesktopEntry[];
@@ -39,9 +39,9 @@ export async function runSearch(query: string, scope: SearchScope, sources: Sear
   const label = { desktop: "桌面项目", zones: "收纳区项目", mappings: "已映射文件夹 · 子目录最多 12 层 / 20,000 个项目 · 最多 200 个匹配", applications: "开始菜单与已安装应用目录" };
   let message = useIndex ? index!.available
     ? index!.message + (index!.total > 200 ? ` · 索引匹配 ${index!.total} 项，加载前 200 项；缩小范围可继续查找` : "")
-    : index!.message + (scope === "all" ? " · 当前搜索桌面、收纳区、映射文件夹和已安装应用" : " · 请启动 Everything 后重试")
+    : index!.message + (scope === "all" ? " · 当前搜索桌面、收纳区、映射文件夹和已安装应用" : " · 请重试查询或检查 Everything 索引状态")
     : label[scope as keyof typeof label];
   if (mapped?.failed) message += " · 映射目录查询失败，仅显示已加载项目";
   if(unique.size>500)message+=' · 合并结果最多加载 500 项，请缩小搜索范围';
-  return { entries: rankSearch([...unique.values()],query,sources.recent).slice(0, scope === "everything" ? 200 : 500), message };
+  return { entries: rankSearch([...unique.values()],query,sources.recent).slice(0, scope === "everything" ? 200 : 500), message, ...(useIndex ? { indexAvailable: index!.available } : {}) };
 }

@@ -32,8 +32,8 @@ export default function EverythingSetup({ compact = false, hideWhenReady = false
   if (hideWhenReady && status?.running && !busy && !error) return null;
   return <div className={`everything-setup ${compact ? 'is-compact' : ''}`} data-everything-setup>
     <div className="everything-setup-heading"><div>
-      <strong>{busy ? phaseLabels[status?.phase ?? 'idle'] : status?.running ? 'Everything 已连接' : status?.installed ? 'Everything 已安装，尚未运行' : status ? '安装 Everything，启用全盘搜索' : error && !checking ? 'Everything 检测失败' : '正在检测 Everything…'}</strong>
-      <p>{status?.running ? '可搜索 Everything 已建立索引的磁盘文件。' : '桌面、收纳区和应用可直接搜索；全盘文件搜索需要 Everything。'}</p>
+      <strong>{busy ? phaseLabels[status?.phase ?? 'idle'] : status?.running ? 'Everything 已运行' : status?.installed ? 'Everything 已安装，尚未运行' : status ? '安装 Everything，启用全盘搜索' : error && !checking ? 'Everything 检测失败' : '正在检测 Everything…'}</strong>
+      <p>{status?.running ? '全盘搜索使用 Everything 的本地索引，首次加载可能需要一些时间。' : '桌面、收纳区和应用可直接搜索；全盘文件搜索需要 Everything。'}</p>
     </div>{status?.running && !busy && <CheckCircle2 className="size-4 shrink-0 text-primary"/>}</div>
     {!status?.installed && status && !status.running && <>
       <p className="everything-setup-source">官方稳定版 1.4.1.1032 · 约 2 MB · 来源：voidtools.com</p>

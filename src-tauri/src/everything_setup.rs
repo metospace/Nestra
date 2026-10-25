@@ -147,7 +147,7 @@ fn detection_status(running: bool, path: Option<PathBuf>) -> EverythingStatus {
         installed, running, install_path: path.map(|path| path.to_string_lossy().into()),
         default_install_dir: default_install_dir().map(|path| path.to_string_lossy().into()),
         phase: if running { "ready" } else { "idle" }.into(), downloaded_bytes: 0, total_bytes: None,
-        message: if running { "Everything 已连接，可搜索全盘文件" } else if installed { "Everything 已安装，尚未启动" } else { "未检测到 Everything，安装后可搜索全盘文件" }.into(),
+        message: if running { "Everything 已运行，搜索时将查询本地索引" } else if installed { "Everything 已安装，尚未启动" } else { "未检测到 Everything，安装后可搜索全盘文件" }.into(),
     }
 }
 
@@ -214,7 +214,7 @@ fn start_and_wait(path: &Path) -> Result<(), String> {
     launch_existing(path)?;
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
-        if runtime_path().0 { update("ready", "Everything 已连接，可搜索全盘文件"); return Ok(()); }
+        if runtime_path().0 { update("ready", "Everything 已启动，搜索时将检查索引连接"); return Ok(()); }
         std::thread::sleep(Duration::from_millis(250));
     }
     update("idle", "Everything 已安装，但尚未连接。索引可能正在加载，请稍后重新检测或启动。");

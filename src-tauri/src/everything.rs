@@ -2,7 +2,7 @@
 //! https://www.voidtools.com/support/everything/sdk/ipc/
 #![cfg(windows)]
 
-use std::sync::OnceLock;
+use std::sync::{OnceLock, atomic::{AtomicU32, Ordering}};
 use std::time::{Duration, Instant};
 use serde::Serialize;
 use windows::core::{w, PCWSTR};
@@ -13,6 +13,7 @@ use crate::scanner::{self, DesktopEntry};
 
 const QUERY2W: usize = 18;
 const REPLY: usize = 0x4e455354;
+static NEXT_REPLY: AtomicU32 = AtomicU32::new(REPLY as u32);
 const FULL_PATH: u32 = 4;
 const MAX_RESULTS: usize = 200;
 const MAX_REPLY_BYTES: usize = 4 * 1024 * 1024;
@@ -28,7 +29,7 @@ pub struct SearchResponse {
 
 struct IndexedItem { path: String, folder: bool }
 struct Reply { total: u32, items: Vec<IndexedItem> }
-struct Receiver { sender: HWND, result: Option<Result<Reply, String>> }
+struct Receiver { sender_pid: u32, reply_id: usize, result: Option<Result<Reply, String>> }
 
 fn read_u32(bytes: &[u8], at: usize) -> Result<u32, String> {
     let end = at.checked_add(4).ok_or("Everything 返回了无效的数据偏移")?;
@@ -62,10 +63,10 @@ fn parse_reply(bytes: &[u8], limit: usize) -> Result<Reply, String> {
     Ok(Reply { total, items })
 }
 
-fn query_bytes(reply_hwnd: u32, query: &str, limit: usize) -> Vec<u8> {
+fn query_bytes(reply_hwnd: u32, reply_id: u32, query: &str, limit: usize) -> Vec<u8> {
     let mut bytes = Vec::new();
     // HWND occupies exactly 32 bits in this packed protocol even on x64.
-    for value in [reply_hwnd, REPLY as u32, 0, 0, limit.min(MAX_RESULTS) as u32, FULL_PATH, 1] {
+    for value in [reply_hwnd, reply_id, 0, 0, limit.min(MAX_RESULTS) as u32, FULL_PATH, 1] {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
     for unit in query.encode_utf16().chain(Some(0)) { bytes.extend_from_slice(&unit.to_le_bytes()); }
@@ -79,9 +80,14 @@ unsafe extern "system" fn receiver_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
     }
     if msg == WM_COPYDATA && lp.0 != 0 {
         let receiver = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Receiver;
-        if !receiver.is_null() && wp.0 == (*receiver).sender.0 as usize {
+        // The SDK identifies replies by dwData; wParam is not part of that
+        // contract. Some versions use a helper window or zero instead of the
+        // notification HWND. Validate the process when a sender is supplied.
+        let mut sender_pid = 0;
+        if wp.0 != 0 { GetWindowThreadProcessId(HWND(wp.0 as _), Some(&mut sender_pid)); }
+        if !receiver.is_null() && (wp.0 == 0 || sender_pid == (*receiver).sender_pid) {
             let cds = &*(lp.0 as *const COPYDATASTRUCT);
-            if cds.dwData == REPLY && !cds.lpData.is_null() && (cds.cbData as usize) <= MAX_REPLY_BYTES {
+            if cds.dwData == (*receiver).reply_id && !cds.lpData.is_null() && (cds.cbData as usize) <= MAX_REPLY_BYTES {
                 let bytes = std::slice::from_raw_parts(cds.lpData as *const u8, cds.cbData as usize);
                 (*receiver).result = Some(parse_reply(bytes, MAX_RESULTS));
                 return LRESULT(1);
@@ -110,7 +116,10 @@ fn query_index(sender: HWND, query: &str, limit: usize) -> Result<Reply, String>
             ..Default::default()
         }));
         if *atom == 0 { return Err("无法创建 Everything 查询通道".into()); }
-        let mut receiver = Box::new(Receiver { sender, result: None });
+        let mut sender_pid = 0;
+        GetWindowThreadProcessId(sender, Some(&mut sender_pid));
+        let reply_id = NEXT_REPLY.fetch_add(1, Ordering::Relaxed);
+        let mut receiver = Box::new(Receiver { sender_pid, reply_id: reply_id as usize, result: None });
         let hwnd = CreateWindowExW(WINDOW_EX_STYLE(0), w!("Nestra.EverythingReply"), w!(""),
             WINDOW_STYLE(0), 0, 0, 0, 0, Some(HWND_MESSAGE), None, None,
             Some((&mut *receiver as *mut Receiver).cast()))
@@ -119,9 +128,14 @@ fn query_index(sender: HWND, query: &str, limit: usize) -> Result<Reply, String>
         struct WindowGuard(HWND);
         impl Drop for WindowGuard { fn drop(&mut self) { unsafe { let _ = DestroyWindow(self.0); } } }
         let _window = WindowGuard(hwnd);
-        let bytes = query_bytes(hwnd.0 as usize as u32, query, limit);
+        // Official SDK compatibility: a normal Everything process must be able
+        // to reply when Nestra was launched from an elevated installer. Allow
+        // only WM_COPYDATA on this short-lived, validated reply window.
+        ChangeWindowMessageFilterEx(hwnd, WM_COPYDATA, MSGFLT_ALLOW, None)
+            .map_err(|_| "无法建立 Everything 回传通道，请以普通用户重新启动 Nestra")?;
+        let bytes = query_bytes(hwnd.0 as usize as u32, reply_id, query, limit);
         let cds = COPYDATASTRUCT { dwData: QUERY2W, cbData: bytes.len() as u32, lpData: bytes.as_ptr() as _ };
-        let deadline = Instant::now() + Duration::from_millis(1800);
+        let deadline = Instant::now() + Duration::from_secs(5);
         let mut accepted = 0usize;
         let sent = SendMessageTimeoutW(sender, WM_COPYDATA, WPARAM(hwnd.0 as usize),
             LPARAM((&cds as *const COPYDATASTRUCT) as isize), SMTO_ABORTIFHUNG, 700, Some(&mut accepted));
@@ -151,15 +165,12 @@ fn search_with_provider(sender: Option<HWND>, query: &str, limit: usize) -> Sear
     let Some(sender) = sender else { return failed("Everything 未运行"); };
     let query = query.trim();
     if query.encode_utf16().count() > 1024 || query.contains('\0') { return failed("搜索条件过长或含无效字符"); }
-    if query.is_empty() { return SearchResponse {
-        available: true, message: "Everything 已连接 · 输入关键词搜索索引".into(), total: 0, entries: Vec::new(),
-    }; }
-    match query_index(sender, query, limit.clamp(1, MAX_RESULTS)) {
+    match query_index(sender, query, if query.is_empty() { 1 } else { limit.clamp(1, MAX_RESULTS) }) {
         Ok(reply) => SearchResponse {
-            available: true, message: "Everything · 已索引的磁盘文件".into(), total: reply.total,
+            available: true, message: if query.is_empty() { "Everything 已连接 · 输入关键词搜索索引" } else { "Everything · 已索引的磁盘文件" }.into(), total: if query.is_empty() { 0 } else { reply.total },
             // Use indexed type/path directly; inaccessible network results must
             // not stall the query while probing metadata or extracting icons.
-            entries: reply.items.into_iter().filter_map(|item|
+            entries: reply.items.into_iter().filter(|_| !query.is_empty()).filter_map(|item|
                 scanner::indexed_entry(&item.path, item.folder)).collect(),
         },
         Err(error) => failed(&error),
@@ -169,6 +180,15 @@ fn search_with_provider(sender: Option<HWND>, query: &str, limit: usize) -> Sear
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Opt-in, read-only query against the user's running Everything instance.
+    #[test]
+    #[ignore = "requires a running Everything instance; reads index only"]
+    fn live_everything_query_smoke() {
+        let sender = find_provider().expect("Everything must be running for this explicit smoke test");
+        let query = std::env::var("NESTRA_TEST_QUERY").unwrap_or_else(|_| "ext:exe".into());
+        let reply = query_index(sender, &query, 5).expect("live Everything must return an IPC reply");
+        eprintln!("Live Everything: {} indexed matches, {} returned", reply.total, reply.items.len());
+    }
     fn response(path: &str, folder: bool) -> Vec<u8> {
         let mut bytes = Vec::new();
         for value in [1u32, 1, 0, FULL_PATH, 1, folder as u32, 28] { bytes.extend(value.to_le_bytes()); }
@@ -179,7 +199,7 @@ mod tests {
     }
     #[test]
     fn query_is_packed_utf16_and_bounded() {
-        let bytes = query_bytes(0x12345678, "报告 ext:pdf", 9999);
+        let bytes = query_bytes(0x12345678, REPLY as u32, "报告 ext:pdf", 9999);
         assert_eq!(read_u32(&bytes, 0).unwrap(), 0x12345678);
         assert_eq!(read_u32(&bytes, 16).unwrap(), MAX_RESULTS as u32);
         assert_eq!(read_u32(&bytes, 20).unwrap(), FULL_PATH);
@@ -220,7 +240,7 @@ mod tests {
                 let bytes = response("E:\\离线资料\\报告.pdf", false);
                 let reply = COPYDATASTRUCT { dwData: read_u32(query, 4).unwrap() as usize,
                     cbData: bytes.len() as u32, lpData: bytes.as_ptr() as _ };
-                SendMessageW(reply_hwnd, WM_COPYDATA, Some(WPARAM(hwnd.0 as usize)), Some(LPARAM((&reply as *const COPYDATASTRUCT) as isize)));
+                SendMessageW(reply_hwnd, WM_COPYDATA, Some(WPARAM(0)), Some(LPARAM((&reply as *const COPYDATASTRUCT) as isize)));
             }
             return LRESULT(1);
         }
@@ -285,11 +305,13 @@ mod tests {
         }
     }
     #[test]
-    fn accepted_query_without_reply_times_out_and_cleans_up() {
+    fn connection_probe_requires_a_reply_and_cleans_up_on_timeout() {
         let server = start_fake(false);
         let start = Instant::now();
-        assert!(query_index(HWND(server.hwnd as _), "报告", 80).err().unwrap().contains("超时"));
-        assert!(start.elapsed() < Duration::from_secs(3));
+        let response = search_with_provider(Some(HWND(server.hwnd as _)), "", 80);
+        assert!(!response.available);
+        assert!(response.message.contains("超时"));
+        assert!(start.elapsed() < Duration::from_secs(7));
     }
     #[test]
     fn provider_absence_is_explicit() {

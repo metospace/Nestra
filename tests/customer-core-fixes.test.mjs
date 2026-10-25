@@ -22,12 +22,12 @@ test('async result enrichment preserves the latest keyboard selection and expand
   const c=vm.createContext({visibleCount:24,results:[],active:0,message:'',loading:false,query:'a',scope:'all',resultsRef:{current:[]},activeRef:{current:0},revision:{current:0},window:{clearTimeout(){},setTimeout:fn=>{callback=fn;return 1;}},searchWithDetails:async(_query,_scope,apply)=>{partial=apply;apply({entries:[{id:'a'},{id:'b'}],message:'local'});return new Promise(resolve=>finish=resolve)}});
   c.setResults=value=>{c.results=value;c.resultsRef.current=value};
   c.setActive=value=>{c.active=value;c.activeRef.current=value};
-  c.setMessage=value=>{c.message=value};c.setLoading=value=>{c.loading=value};
+  c.setMessage=value=>{c.message=value};c.setLoading=value=>{c.loading=value};c.setIndexFailed=value=>{c.indexFailed=value};
   c.setVisibleCount=value=>{c.visibleCount=typeof value==='function'?value(c.visibleCount):value};
   vm.runInContext(ts.transpile(`globalThis.runSearchEffect = (${searchEffect.getText(ast)});globalThis.resetSearchResults = (${resetEffect.getText(ast)});`,{target:ts.ScriptTarget.ES2022}),c);
   let cancel=c.runSearchEffect();const pending=callback();c.setActive(1);
-  partial({entries:[{id:'c'},{id:'a'},{id:'b'}],message:'partial'});assert.equal(c.active,2);
-  finish({entries:[...Array.from({length:30},(_,i)=>({id:`more-${i}`})),{id:'b'}],message:'final'});await pending;
+  partial({entries:[{id:'c'},{id:'a'},{id:'b'}],message:'partial',indexAvailable:false});assert.equal(c.active,2);assert.equal(c.indexFailed,true);
+  finish({entries:[...Array.from({length:30},(_,i)=>({id:`more-${i}`})),{id:'b'}],message:'final',indexAvailable:true});await pending;assert.equal(c.indexFailed,false);
   assert.equal(c.results[c.active].id,'b');assert.equal(c.visibleCount,31);
   // Refresh re-runs only the search effect, retaining selection and expanded rows.
   cancel();cancel=c.runSearchEffect();assert.equal(c.results[c.active].id,'b');assert.equal(c.visibleCount,31);

@@ -47,11 +47,12 @@ export default function SurfaceSettings({ panelKey }: { panelKey: string }) {
         </TabsContent>
         <TabsContent value="layout" className="grid gap-5 pt-3">
           <div className="grid grid-cols-2 gap-3"><FieldSelect label="排列" value={layout.viewMode ?? 'grid'} options={[{ label: '网格', value: 'grid' }, { label: '列表', value: 'list' }]} onChange={value => presentation({ viewMode: value as 'grid' | 'list' })} /><FieldSelect label="密度" value={layout.density ?? 'comfortable'} options={[{ label: '舒适', value: 'comfortable' }, { label: '紧凑', value: 'compact' }]} onChange={value => presentation({ density: value as 'comfortable' | 'compact' })} /></div>
-          {layout.viewMode !== 'list' && <Range label="网格列数" value={layout.columns ?? 4} min={2} max={8} onChange={value => presentation({ columns: value })} />}
+          {layout.viewMode !== 'list' && <Range label={panelKey === 'system:launcher' ? '网格列数' : '首选列数'} value={layout.columns ?? 4} min={2} max={8} onChange={value => presentation({ columns: value })} />}
           <Range label="图标大小" value={layout.iconSize ?? (layout.density === 'compact' ? 32 : 42)} min={24} max={64} step={2} onChange={value => presentation({ iconSize: value })} />
           <Range label="项目间距" value={layout.itemGap ?? (layout.density === 'compact' ? 2 : 8)} min={0} max={24} onChange={value => presentation({ itemGap: value })} />
           <FieldSelect label="文件名行数" value={String(layout.labelLines ?? 2)} options={[{ label: '一行', value: '1' }, { label: '两行', value: '2' }, { label: '三行', value: '3' }]} onChange={value => presentation({ labelLines: Number(value) })} />
-          <label className="flex items-center justify-between gap-3 text-xs">锁定此栏位置和大小<Switch checked={Boolean(layout.locked)} onCheckedChange={locked => updateLayout(panelKey, { locked })} /></label>
+          {panelKey !== 'system:launcher' && <p className="text-xs leading-relaxed text-muted-foreground">宽高自动适应完整图标；屏幕空间不足时调整列数或分页显示。</p>}
+          <label className="flex items-center justify-between gap-3 text-xs">{panelKey === 'system:launcher' ? '锁定此栏位置和大小' : '锁定此栏位置'}<Switch checked={Boolean(layout.locked)} onCheckedChange={locked => updateLayout(panelKey, { locked })} /></label>
         </TabsContent>
       </Tabs>
       <p className="border-t pt-3 text-xs text-muted-foreground">直接查看桌面上的变化，文件保持原位。</p>
