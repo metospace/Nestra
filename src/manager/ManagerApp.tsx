@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { ArchiveRestore, ChevronRight, FileText, Folders, House, LoaderCircle, Minus, Monitor, Palette, PanelsTopLeft, RefreshCw, Rocket, Search, Settings2, X } from 'lucide-react';
+import { ArchiveRestore, ChevronRight, FileText, Folders, House, LoaderCircle, Monitor, Palette, PanelsTopLeft, RefreshCw, Rocket, Search, Settings2 } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -67,9 +67,9 @@ export default function ManagerApp() {
   const unifyAppearance = async () => { if (await confirmDialog('将所有收纳栏恢复为全局风格？已有独立样式将被替换，位置和文件显示布局保留。')) useGlobalAppearanceForAll(); };
   const current = sections.find(item => item.id === section)!;
   return <div className="control-center">
-    <header className="manager-titlebar" data-tauri-drag-region>
+    <header className="manager-titlebar">
       <Button variant="ghost" className="manager-brand" onClick={() => navigate('overview')} aria-label="返回桌面空间"><NestraLogo className="manager-logo"/><strong>Nestra</strong><span>控制中心</span></Button>
-      <div className="manager-titlebar-actions"><Button size="sm" variant="ghost" className="manager-global-search" aria-label="搜索文件和应用" onClick={() => void requestOpenSearch()}><Search/><span>搜索文件、应用</span><kbd>Ctrl Alt F</kbd></Button><span className="titlebar-divider"/><Button size="icon" variant="ghost" aria-label="最小化控制中心" onClick={() => void currentWindow.minimize()}><Minus/></Button><Button size="icon" variant="ghost" aria-label="隐藏控制中心" onClick={() => void currentWindow.hide()}><X/></Button></div>
+      <Button size="sm" variant="ghost" className="manager-global-search" aria-label="搜索文件和应用" onClick={() => void requestOpenSearch()}><Search/><span>搜索文件、应用</span><kbd>Ctrl Alt F</kbd></Button>
     </header>
     <ResizablePanelGroup orientation="horizontal" className="manager-workspace">
       <ResizablePanel defaultSize="205px" minSize="175px" maxSize="280px" className="manager-navigation-panel">

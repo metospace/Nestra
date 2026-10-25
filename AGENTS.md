@@ -44,6 +44,9 @@
 
 ## Windows / Tauri 兼容性（来自 DustDesk 的血泪规则）
 
+- 控制中心保留系统标题栏（`decorations: true`），最小化、最大化、关闭和
+  窗口拖动统一交给系统；前端工具栏不要重复实现窗口按钮或标题栏拖动区域。
+
 - 不要在同步 Tauri command 或事件回调里创建/销毁/显示/隐藏窗口——Windows 下
   可能死锁。一律 `async fn` + `tauri::async_runtime::spawn_blocking`。
 - 需要接收外部文件拖放的 WebView 窗口必须以 `visible(true)` 创建；隐藏创建
