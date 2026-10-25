@@ -72,6 +72,12 @@
   },
   "bundle": {
     "active": true,
+    "windows": {
+      "nsis": {
+        "languages": ["SimpChinese"],
+        "displayLanguageSelector": false
+      }
+    },
     "targets": [
       "nsis"
     ],
