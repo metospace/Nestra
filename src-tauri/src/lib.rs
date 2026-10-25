@@ -5,6 +5,8 @@ mod clipboard;
 mod commands;
 mod configuration;
 #[cfg(windows)]
+mod desktop_diagnostics;
+#[cfg(windows)]
 mod everything;
 #[cfg(windows)]
 mod explorer;
@@ -82,6 +84,8 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            #[cfg(windows)]
+            desktop_diagnostics::init(app.handle());
             prepare_desktop_layer(app.handle())?;
             session::apply_takeover(app.handle());
             clipboard::init(app.handle());

@@ -64,6 +64,7 @@ impl TransitionProbe {
 thread_local! {
     static DESKTOP_TRACKING: RefCell<Option<DesktopTracking>> = const { RefCell::new(None) };
     static TRANSITION_PROBE: RefCell<TransitionProbe> = const { RefCell::new(TransitionProbe { until: None }) };
+    static LAST_DIAGNOSTIC: RefCell<Option<(serde_json::Value, Instant)>> = const { RefCell::new(None) };
 }
 
 struct DesktopTracking {
@@ -141,6 +142,7 @@ pub fn set_hit_rects(mut rects: Vec<RECT>) {
     if let Ok(mut current) = HIT_RECTS.write() {
         if *current == rects { return; }
         *current = rects;
+        crate::desktop_diagnostics::record("hit-region", serde_json::json!({ "count": current.len() }));
     }
     let hwnd = HWND(LAYER_HWND.load(Ordering::SeqCst) as _);
     if !hwnd.0.is_null() {
@@ -349,8 +351,13 @@ fn temporary_topmost_allowed(mode: &DesktopOrderMode, stay: bool, desktop_foregr
 unsafe fn position_without_activation(hwnd: HWND, after: HWND) -> windows::core::Result<()> {
     // Internal moves must bypass WM_WINDOWPOSCHANGING, which prevents Shell or
     // activation requests from independently changing the layer's Z order.
-    SetWindowPos(hwnd, Some(after), 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE
-        | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING)
+    let result = SetWindowPos(hwnd, Some(after), 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE
+        | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING);
+    if let Err(error) = &result {
+        crate::desktop_diagnostics::record("position-failed", serde_json::json!({
+            "hwnd": hwnd.0 as isize, "after": after.0 as isize, "error": error.code().0 }));
+    }
+    result
 }
 
 unsafe fn set_temporary_topmost(hwnd: HWND, order: &[OrderedWindow]) {
@@ -540,8 +547,59 @@ unsafe fn reconcile_desktop_event(hwnd: HWND, foreground_event: bool) {
         || host.is_some_and(|host| desktop_menu_for_host(foreground, host));
     let stay = STAY_ON_DESKTOP.load(Ordering::SeqCst);
     let cloaked = shell_cloaked(hwnd);
+    trace_desktop_state(hwnd, host, marker, &order, foreground, stay, desktop_foreground, cloaked);
     apply_desktop_order(hwnd, host, marker, &order, stay, desktop_foreground, cloaked);
     update_transition_probe(hwnd, foreground_event, stay && desktop_foreground && !cloaked);
+}
+
+unsafe fn trace_desktop_state(hwnd: HWND, host: Option<HWND>, marker: Option<HWND>,
+    order: &[OrderedWindow], foreground: HWND, stay: bool, eligible: bool, cloaked: bool) {
+    if !crate::desktop_diagnostics::enabled() { return; }
+    use serde_json::json;
+    use windows::Win32::Graphics::Gdi::GetWindowRgnBox;
+    unsafe fn identity(hwnd: HWND) -> serde_json::Value {
+        let mut class = [0u16; 128];
+        let length = GetClassNameW(hwnd, &mut class) as usize;
+        let mut pid = 0;
+        let thread = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        let mut rect = RECT::default();
+        let bounds = GetWindowRect(hwnd, &mut rect).ok().map(|_| [rect.left, rect.top, rect.right, rect.bottom]);
+        json!({ "hwnd": hwnd.0 as isize, "class": String::from_utf16_lossy(&class[..length]),
+            "pid": pid, "thread": thread, "visible": IsWindowVisible(hwnd).as_bool(),
+            "iconic": IsIconic(hwnd).as_bool(), "cloak": window_cloak(hwnd), "bounds": bounds,
+            "topmost": GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0 })
+    }
+    let mut rect = RECT::default();
+    let bounds = GetWindowRect(hwnd, &mut rect).ok().map(|_| [rect.left, rect.top, rect.right, rect.bottom]);
+    let mut region = RECT::default();
+    let region_type = GetWindowRgnBox(hwnd, &mut region).0;
+    let mode = desktop_order_mode(order, hwnd.0 as isize, host.map(|h| h.0 as isize), marker.map(|h| h.0 as isize));
+    let index = |value: Option<HWND>| value.and_then(|h| order.iter().position(|w| w.value == h.0 as isize));
+    let above_layer: Vec<_> = order[..index(Some(hwnd)).unwrap_or(0)].iter().rev()
+        .map(|window| HWND(window.value as _)).filter(|h| IsWindowVisible(*h).as_bool() && !IsIconic(*h).as_bool())
+        .take(6).map(|h| identity(h)).collect();
+    let snapshot = json!({
+        "foreground": identity(foreground), "foreground_root": identity(GetAncestor(foreground, GA_ROOT)),
+        "shell": identity(GetShellWindow()), "host": host.map(|h| identity(h)),
+        "layer": identity(hwnd), "layer_style": GetWindowLongPtrW(hwnd, GWL_STYLE) as u32,
+        "layer_exstyle": GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32, "bounds": bounds,
+        "region_type": region_type, "region_box": [region.left, region.top, region.right, region.bottom],
+        "hit_rects": HIT_RECTS.read().map(|r| r.len()).ok(),
+        "marker": marker.map(|h| h.0 as isize), "order_layer_host_marker": [index(Some(hwnd)), index(host), index(marker)],
+        "above_layer": above_layer,
+        "mode": format!("{mode:?}"), "stay": stay, "desktop_foreground": eligible,
+        "promote": temporary_topmost_allowed(&mode, stay, eligible, cloaked),
+        "input_granted": INPUT_GRANTED.load(Ordering::SeqCst),
+        "input_previous": PREV_FOREGROUND.load(Ordering::SeqCst),
+        "input_thread": ATTACHED_THREAD.load(Ordering::SeqCst),
+    });
+    LAST_DIAGNOSTIC.with(|last| {
+        let mut last = last.borrow_mut();
+        let now = Instant::now();
+        if last.as_ref().is_some_and(|(value, time)| value == &snapshot && now.duration_since(*time) < Duration::from_secs(30)) { return; }
+        crate::desktop_diagnostics::record("desktop-state", &snapshot);
+        *last = Some((snapshot, now));
+    });
 }
 
 unsafe fn update_transition_probe(hwnd: HWND, foreground_event: bool, eligible: bool) {
@@ -750,15 +808,19 @@ fn exclude_from_peek(hwnd: HWND) -> windows::core::Result<()> {
         &enabled as *const BOOL as *const _, std::mem::size_of::<BOOL>() as u32) }
 }
 
-fn shell_cloaked(hwnd: HWND) -> bool {
-    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED,
-        DWM_CLOAKED_SHELL, DWM_CLOAKED_INHERITED};
+fn window_cloak(hwnd: HWND) -> Option<u32> {
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
     let mut cloak = 0u32;
     let result = unsafe { DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED,
         &mut cloak as *mut u32 as *mut _, std::mem::size_of::<u32>() as u32) };
+    result.ok().map(|_| cloak)
+}
+
+fn shell_cloaked(hwnd: HWND) -> bool {
+    use windows::Win32::Graphics::Dwm::{DWM_CLOAKED_SHELL, DWM_CLOAKED_INHERITED};
     // Cloaking belongs to Shell/virtual desktops. Never forcibly uncloak the
     // layer, or promote it when we cannot verify its current desktop membership.
-    result.is_err() || cloak & (DWM_CLOAKED_SHELL | DWM_CLOAKED_INHERITED) != 0
+    window_cloak(hwnd).is_none_or(|cloak| cloak & (DWM_CLOAKED_SHELL | DWM_CLOAKED_INHERITED) != 0)
 }
 
 fn frameless_style(style: u32) -> u32 {
@@ -767,6 +829,10 @@ fn frameless_style(style: u32) -> u32 {
 
 unsafe extern "system" fn layer_window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, mut lparam: LPARAM) -> LRESULT {
     match msg {
+        WM_SHOWWINDOW => crate::desktop_diagnostics::record("show-window", serde_json::json!({
+            "shown": wparam.0 != 0, "reason": lparam.0 })),
+        WM_SIZE if wparam.0 == SIZE_MINIMIZED as usize =>
+            crate::desktop_diagnostics::record("minimized", serde_json::json!({ "hwnd": hwnd.0 as isize })),
         WM_NCCALCSIZE | WM_NCPAINT => return LRESULT(0),
         // Tao still receives activation changes, but DefWindowProc must never
         // paint a Windows caption over the shaped, frameless desktop WebView.
@@ -803,6 +869,8 @@ unsafe extern "system" fn layer_window_proc(hwnd: HWND, msg: u32, wparam: WPARAM
             }
             if STAY_ON_DESKTOP.load(Ordering::SeqCst) {
                 if IsIconic(hwnd).as_bool() || !IsWindowVisible(hwnd).as_bool() {
+                    crate::desktop_diagnostics::record("visibility-recovery", serde_json::json!({
+                        "visible": IsWindowVisible(hwnd).as_bool(), "iconic": IsIconic(hwnd).as_bool() }));
                     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
                 }
 
@@ -823,6 +891,7 @@ unsafe extern "system" fn layer_window_proc(hwnd: HWND, msg: u32, wparam: WPARAM
             }
         }
         WM_NCDESTROY => {
+            crate::desktop_diagnostics::record("layer-destroyed", serde_json::json!({ "hwnd": hwnd.0 as isize }));
             release_keyboard_focus_on_window_thread();
             let _ = KillTimer(Some(hwnd), RESTORE_TIMER_ID);
             stop_transition_probe(hwnd);

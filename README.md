@@ -30,6 +30,12 @@ This is the Tauri port of the original WPF app (`E:\技能包\Guidesk.App`).
 
 ## 稳定性修复构建（2026-10-24）
 
+2026-10-25 跟进：用户报告普通应用切回桌面后仍偶发消失，本次现场操作未复现。
+`releases/desktop-diagnostics-20261025/` 为诊断构建，包含此前修复并自动保存窗口状态；
+它用于捕获再次发生时的证据，尚未确认这次偶发问题的原因或完成针对性修复。
+日志位于 `%LOCALAPPDATA%\app.nestra.desktop\diagnostics\desktop-current.jsonl` 和
+`desktop-previous.jsonl`，两份各不超过 1 MiB；只记录窗口元数据，后台写入。
+
 本次 Windows x64 安装包、便携版和使用说明位于 `releases/desktop-input-20261024/`。
 安装包为 `Nestra_0.1.0_x64-setup.exe`；便携版解压后运行 `Nestra.exe`。
 升级前请先从托盘退出旧程序。两种版本共用原有配置，版本号仍为 `0.1.0`。
