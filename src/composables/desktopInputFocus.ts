@@ -13,6 +13,16 @@ export function installDesktopInputFocus(
   let revision = 0, applied = 0;
   let running = false, held = false, granting = false, restoring = false, disposed = false;
   let frame = 0;
+  let retryRevision = -1, failures = 0;
+  let cancelRetry: (() => void) | undefined;
+
+  function retryDelay(delay: number): Promise<void> {
+    return new Promise(resolve => {
+      const finish = () => { window.clearTimeout(timer); cancelRetry = undefined; resolve(); };
+      const timer = window.setTimeout(finish, delay);
+      cancelRetry = finish;
+    });
+  }
 
   async function reconcile(): Promise<void> {
     if (running) return;
@@ -29,6 +39,7 @@ export function installDesktopInputFocus(
         }
         if (applied === revision) break;
         const target = wanted, request = revision;
+        let retry = false;
         granting = true;
         try {
           await grant();
@@ -43,8 +54,23 @@ export function installDesktopInputFocus(
         } catch {
           // Even a timed-out request may have reached the native window thread.
           held = true;
-          if (request === revision) { wanted = null; revision++; reportError(); }
-        } finally { granting = false; applied = request; }
+          if (request === revision && wanted === target && valid(target)) {
+            if (retryRevision !== request) { retryRevision = request; failures = 0; }
+            failures++;
+            // A stale foreground queue or a WebView MoveFocus transition can
+            // fail once. Detach first, then retry only the same live intent.
+            if (failures < 3) {
+              try {
+                await release(); held = false;
+                if (request === revision && wanted === target && valid(target)) {
+                  await retryDelay(failures * 80);
+                  retry = request === revision && wanted === target && valid(target);
+                }
+              } catch { /* Unknown native cleanup state: stop retrying. */ }
+            }
+            if (!retry && request === revision) { wanted = null; revision++; reportError(); }
+          }
+        } finally { granting = false; applied = retry ? -1 : request; }
       }
     } finally { running = false; }
   }
@@ -54,6 +80,7 @@ export function installDesktopInputFocus(
     if (target === wanted && (running || !target)) return;
     wanted = target;
     revision++;
+    cancelRetry?.();
     void reconcile();
   }
   function checkFocus(): void {

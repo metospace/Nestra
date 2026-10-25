@@ -494,14 +494,24 @@ pub async fn grant_desktop_input(app: AppHandle) -> Result<(), String> {
     #[cfg(windows)]
     {
         let (send, receive) = std::sync::mpsc::sync_channel(1);
+        let pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let request = pending.clone();
         app.run_on_main_thread(move || {
+            // A callback still queued after the caller timed out must not take
+            // keyboard focus when the user has already left the editor.
+            if !request.swap(false, std::sync::atomic::Ordering::SeqCst) { return; }
             let granted = crate::win32::grant_keyboard_focus_on_window_thread();
             let _ = send.send(granted);
         }).map_err(|error| error.to_string())?;
-        tauri::async_runtime::spawn_blocking(move ||
-            receive.recv_timeout(std::time::Duration::from_secs(2)).map_err(|error| error.to_string())
+        tauri::async_runtime::spawn_blocking(move || {
+            let result = receive.recv_timeout(std::time::Duration::from_secs(2));
+            if result.is_err() {
+                pending.store(false, std::sync::atomic::Ordering::SeqCst);
+                crate::desktop_diagnostics::record("input-focus-timeout", serde_json::json!({ "stage": "window-thread" }));
+            }
+            result.map_err(|error| error.to_string())
                 .and_then(|granted| if granted { Ok(()) } else { Err("无法取得 WebView 键盘焦点".into()) })
-        ).await.map_err(|error| error.to_string())?
+        }).await.map_err(|error| error.to_string())?
     }
     #[cfg(not(windows))]
     { let _ = app; Ok(()) }

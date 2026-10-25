@@ -17,7 +17,7 @@ function fixture({ grant=async()=>{}, release=async()=>{} }={}) {
     removeEventListener(type, fn) { this.listeners.set(type,(this.listeners.get(type)??[]).filter(x=>x.fn!==fn)); }
     emit(type, event={}, stopped=false) { for(const {fn,capture} of [...(this.listeners.get(type)??[])].sort((a,b)=>Number(b.capture)-Number(a.capture))) if(capture||!stopped) fn(event); }
   }
-  const doc=new Events(), win=new Events(), frames=new Map(), calls=[];
+  const doc=new Events(), win=new Events(), frames=new Map(), timers=new Map(), calls=[];
   let observer, frameId=0;
   class Element {
     constructor(isEditor=false,parent=null) { this.isEditor=isEditor; this.parent=parent; this.isConnected=true; this.disabled=false; this.focusCount=0; }
@@ -28,6 +28,8 @@ function fixture({ grant=async()=>{}, release=async()=>{} }={}) {
   doc.body=new Element(); doc.activeElement=doc.body;
   win.requestAnimationFrame=fn=>{frames.set(++frameId,fn);return frameId;};
   win.cancelAnimationFrame=id=>frames.delete(id);
+  win.setTimeout=fn=>{timers.set(++frameId,fn);return frameId;};
+  win.clearTimeout=id=>timers.delete(id);
   class Observer { constructor(fn){observer=fn;} observe(){} disconnect(){observer=()=>{};} }
   const module={exports:{}};
   vm.runInNewContext(source,{module,exports:module.exports,HTMLElement:Element,MutationObserver:Observer,document:doc,window:win});
@@ -35,7 +37,8 @@ function fixture({ grant=async()=>{}, release=async()=>{} }={}) {
   return { doc,win,calls,dispose, input:()=>new Element(true), button:()=>new Element(), child:parent=>new Element(false,parent),
     click:(el,stopped=false)=>doc.emit('pointerdown',{target:el,button:0},stopped),
     blurDom:()=>{doc.activeElement=doc.body;doc.emit('focusout',{});},
-    frame:()=>{for(const [id,fn] of [...frames]){frames.delete(id);fn();}}, mutate:()=>observer() };
+    frame:()=>{for(const [id,fn] of [...frames]){frames.delete(id);fn();}},
+    retry:()=>{for(const [id,fn] of [...timers]){timers.delete(id);fn();}}, mutate:()=>observer() };
 }
 
 test('capture reclaims an already DOM-focused rename input despite pointerdown.stop',async()=>{
@@ -93,9 +96,32 @@ test('switching applications while grant is pending does not steal focus back',a
 });
 test('failed grant cleans up and can be retried by clicking the same input',async()=>{
   let failed=true; const t=fixture({grant:async()=>{if(failed)throw Error('attach failed');}}),input=t.input();
-  input.focus(); await settle(); assert.deepEqual(t.calls,['grant','error','release']);
+  input.focus(); await settle();t.retry();await settle();t.retry();await settle();
+  assert.deepEqual(t.calls,['grant','release','grant','release','grant','error','release']);
   failed=false; t.click(input,true); await settle(); assert.equal(t.calls.at(-1),'grant');
   assert.equal(t.doc.activeElement,input);
+});
+
+test('transient native focus failures recover automatically without a second click or error',async()=>{
+ let attempt=0;const t=fixture({grant:async()=>{if(++attempt<3)throw Error('foreground transition');}}),input=t.input();
+ input.focus();await settle();assert.deepEqual(t.calls,['grant','release']);
+ t.retry();await settle();t.retry();await settle();
+ assert.deepEqual(t.calls,['grant','release','grant','release','grant']);assert.equal(t.doc.activeElement,input);assert.equal(input.focusCount,2);
+});
+test('switching apps during retry cancels the timer and never takes focus back',async()=>{
+ const t=fixture({grant:async()=>{throw Error('not ready');}}),input=t.input();
+ input.focus();await settle();t.win.emit('blur');await settle();t.retry();await settle();
+ assert.deepEqual(t.calls,['grant','release']);assert.equal(input.focusCount,1);
+});
+test('a new editor cancels the old retry and only the latest request restores focus',async()=>{
+ let first=true;const t=fixture({grant:async()=>{if(first){first=false;throw Error('not ready');}}}),old=t.input(),next=t.input();
+ old.focus();await settle();t.click(next);next.focus();await settle();t.retry();await settle();
+ assert.deepEqual(t.calls,['grant','release','grant']);assert.equal(t.doc.activeElement,next);assert.equal(old.focusCount,1);
+});
+test('removing an editor during retry prevents a late grant and hides stale errors',async()=>{
+ const t=fixture({grant:async()=>{throw Error('not ready');}}),input=t.input();
+ input.focus();await settle();input.isConnected=false;t.mutate();await settle();t.retry();await settle();
+ assert.deepEqual(t.calls,['grant','release']);assert.equal(input.focusCount,1);
 });
 test('stale failures do not display errors for a closed editor',async()=>{
   const gate=deferred(),t=fixture({grant:()=>gate.promise}),input=t.input();

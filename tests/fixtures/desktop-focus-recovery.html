@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nestra · 焦点瞬时失败恢复验收</title><link rel="stylesheet" href="./fixture.css"></head><body data-window="desktop"><div id="app"></div><script type="module">
+import { configuration, entry, installFixture, layout, mountFixtureApp } from './mock-native.js';
+let failures=0, succeeded=0;
+const group={id:'focus',name:'命名测试',dirName:'命名测试',sourceKind:'zone'};
+const fixture=installFixture({disk:configuration({customGroups:[group],panelLayouts:{...configuration().panelLayouts,'zone:focus':{...layout(36,60,420,300),autoSize:false}}}),files:[entry('示例.txt','命名测试')],commands:{grant_desktop_input:()=>{if(failures>0){failures--;throw Error('模拟前台线程暂未就绪');}succeeded++;},list_displays:()=>[{id:'main',name:'验收显示器',x:0,y:0,width:innerWidth,height:innerHeight,isPrimary:true}]}});
+const React=await import('react'),h=React.createElement;
+function Controls(){const[,refresh]=React.useState(0);React.useEffect(()=>{const timer=setInterval(()=>refresh(x=>x+1),100);return()=>clearInterval(timer);},[]);return h('div',null,h('p',null,'仅内存数据：先点击模拟，再双击收纳区标题并输入。'),h('button',{onClick:()=>{failures=2;succeeded=0;fixture.state.calls.length=0;}},'下一次编辑模拟两次瞬时失败'),h('output',{'aria-label':'焦点申请记录'},JSON.stringify({grant:fixture.state.calls.filter(x=>x.command==='grant_desktop_input').length,release:fixture.state.calls.filter(x=>x.command==='release_desktop_input').length,succeeded,remainingFailures:failures})));}
+await mountFixtureApp(Controls);
+</script><style>.fixture-controls{left:auto;right:12px;top:12px;bottom:auto;width:280px;max-height:200px}</style></body></html>

@@ -706,21 +706,42 @@ fn post_input_request(message: u32) {
 
 // AttachThreadInput and SetFocus must use the thread that OWNS the WebView.
 // IPC/pause callbacks may run on other threads; keep the whole session here.
+fn record_input_focus(stage: &str, layer: HWND, target: HWND, expected: HWND, error: i32) {
+    unsafe {
+        let foreground = GetForegroundWindow();
+        let mut class = [0u16; 128];
+        let length = GetClassNameW(foreground, &mut class) as usize;
+        crate::desktop_diagnostics::record("input-focus", serde_json::json!({
+            "stage": stage, "error": error, "layer": layer.0 as isize, "target": target.0 as isize,
+            "expected_foreground": expected.0 as isize, "foreground": foreground.0 as isize,
+            "foreground_class": String::from_utf16_lossy(&class[..length]),
+            "own_thread": GetCurrentThreadId(), "target_thread": GetWindowThreadProcessId(target, None),
+            "foreground_thread": GetWindowThreadProcessId(foreground, None), "focus": GetFocus().0 as isize,
+        }));
+    }
+}
+
 pub(crate) fn grant_keyboard_focus_on_window_thread() -> bool {
     let value = LAYER_HWND.load(Ordering::SeqCst);
     if value == 0 {
+        record_input_focus("missing-layer", HWND::default(), HWND::default(), HWND::default(), 0);
         return false;
     }
     let layer = HWND(value as _);
     unsafe {
         if !IsWindow(Some(layer)).as_bool() || !IsWindowVisible(layer).as_bool()
             || !STAY_ON_DESKTOP.load(Ordering::SeqCst) {
+            record_input_focus("inactive-layer", layer, HWND::default(), HWND::default(), 0);
             return false;
         }
 
         let foreground = GetForegroundWindow();
         let target = FindWindowExW(Some(layer), None, w!("WRY_WEBVIEW"), None)
             .unwrap_or_else(|_| GetWindow(layer, GW_CHILD).unwrap_or(layer));
+        if foreground.0.is_null() || target == layer || !IsWindow(Some(target)).as_bool() {
+            record_input_focus("window-not-ready", layer, target, foreground, 0);
+            return false;
+        }
         let focused = GetFocus();
         if INPUT_GRANTED.load(Ordering::SeqCst)
             && (foreground == layer || foreground.0 as isize == PREV_FOREGROUND.load(Ordering::SeqCst))
@@ -737,6 +758,7 @@ pub(crate) fn grant_keyboard_focus_on_window_thread() -> bool {
             let own = GetCurrentThreadId();
             let _ = AttachThreadInput(own, old_thread as u32, false);
         }
+        INPUT_GRANTED.store(false, Ordering::SeqCst);
 
         let foreground_thread = if foreground.0.is_null() {
             0
@@ -755,17 +777,29 @@ pub(crate) fn grant_keyboard_focus_on_window_thread() -> bool {
                 // Do not report a usable keyboard session if attaching failed.
                 INPUT_GRANTED.store(false, Ordering::SeqCst);
                 PREV_FOREGROUND.store(0, Ordering::SeqCst);
+                record_input_focus("attach-failed", layer, target, foreground, windows::Win32::Foundation::GetLastError().0 as i32);
                 return false;
             }
         }
 
+        INPUT_GRANTED.store(true, Ordering::SeqCst);
+        let current = GetForegroundWindow();
+        if current != foreground && current != layer {
+            record_input_focus("foreground-changed", layer, target, foreground, 0);
+            release_keyboard_focus_on_window_thread();
+            return false;
+        }
+
         // 焦点要给到 wry 的 WebView 宿主子窗口：它的窗口过程收到 WM_SETFOCUS
         // 后会调 MoveFocus 把键盘焦点推进页面。外层 Tauri 窗口没有这一步。
-        let _ = SetFocus(Some(target));
-        INPUT_GRANTED.store(true, Ordering::SeqCst);
+        let result = SetFocus(Some(target));
         let focused = GetFocus();
-        let granted = focused == target || IsChild(target, focused).as_bool();
-        if !granted { release_keyboard_focus_on_window_thread(); }
+        let current = GetForegroundWindow();
+        let granted = (focused == target || IsChild(target, focused).as_bool()) && (current == foreground || current == layer);
+        if !granted {
+            record_input_focus("focus-failed", layer, target, foreground, result.err().map(|error| error.code().0).unwrap_or(0));
+            release_keyboard_focus_on_window_thread();
+        } else { record_input_focus("granted", layer, target, foreground, 0); }
         granted
     }
 }
