@@ -7,7 +7,8 @@ export function settingsPosition(layout: Pick<PanelLayout, 'x' | 'y' | 'width'>,
   const maxHeight=Math.max(1,viewport.height-margin*2), height=Math.min(580,maxHeight);
   const right=layout.x+layout.width+10;
   const left=right+width<=viewport.width-margin ? right : layout.x-width-10;
-  return {left:Math.max(margin,Math.min(left,viewport.width-width-margin)),top:Math.max(margin,Math.min(layout.y,viewport.height-height-margin)),width,maxHeight};
+  const top=Math.max(margin,Math.min(layout.y,viewport.height-height-margin));
+  return {left:Math.max(margin,Math.min(left,viewport.width-width-margin)),top,width,maxHeight:Math.min(maxHeight,Math.max(1,viewport.height-top-margin))};
 }
 export function surfaceAppearance(layout: PanelLayout, global: AppearanceSettings) {
   return { ...global, ...layout.appearance };

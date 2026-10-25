@@ -55,7 +55,7 @@ import {
   startWithWindows as readStartWithWindows,
 } from "@/lib/tauri";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type {
   AppearanceSettings,
@@ -1757,13 +1757,14 @@ export async function addCustomGroup(name: string): Promise<boolean> {
 
 export function setPanelPresentation(
   key: string,
-  patch: Pick<Partial<PanelLayout>, "viewMode" | "columns" | "density" | "iconSize" | "itemGap" | "labelLines">,
+  patch: Pick<Partial<PanelLayout>, "viewMode" | "columns" | "density" | "iconSize" | "itemGap" | "labelLines" | "autoHide" | "autoHideDelay">,
 ): void {
   const normalized = { ...patch };
   if (normalized.columns != null) normalized.columns = Math.max(2, Math.min(8, normalized.columns));
   if (normalized.iconSize != null) normalized.iconSize = Math.round(Math.max(24, Math.min(64, normalized.iconSize)));
   if (normalized.itemGap != null) normalized.itemGap = Math.round(Math.max(0, Math.min(24, normalized.itemGap)));
   if (normalized.labelLines != null) normalized.labelLines = Math.round(Math.max(1, Math.min(3, normalized.labelLines)));
+  if (normalized.autoHideDelay != null) normalized.autoHideDelay = Number.isFinite(normalized.autoHideDelay) ? Math.round(Math.max(200, Math.min(5000, normalized.autoHideDelay))) : 800;
   updateLayout(key, normalized);
 }
 
@@ -2214,7 +2215,7 @@ export function locateSurface(key: string): void {
     monitorId: display.id, monitorBounds: { x: display.x, y: display.y },
     width: Math.min(layout.width, display.width - 56), height: Math.min(layout.height, display.height - 104), zIndex: nextZ() });
   delete layout.displacedFrom;
-  void setPaused(false); scheduleSave(); scheduleHitRectSync(); showStatus("已显示并定位到显示器左上方");
+  void setPaused(false); scheduleSave(); scheduleHitRectSync(); void emit('nestra://reveal-surface', key).catch(() => {}); showStatus("已显示并定位到显示器左上方");
 }
 
 /** Viewing preserves a usable saved position, including locked surfaces. */
@@ -2229,6 +2230,7 @@ export async function viewSurface(key: string): Promise<void> {
       recoverSurface(layout, store.displays);
       layout.visible = true; layout.zIndex = nextZ();
       scheduleHitRectSync(); await flushState();
+      await emit('nestra://reveal-surface', key);
       await getCurrentWebviewWindow().hide();
     } catch (error) { showStatus(`无法在桌面查看：${error}`); }
   });

@@ -65,6 +65,8 @@ export function validateConfiguration(input: unknown): asserts input is Persiste
     for (const [key, min, max] of [["iconSize",24,64],["itemGap",0,24],["labelLines",1,3],["columns",2,8]] as const) if (layout[key] !== undefined && (!Number.isInteger(layout[key]) || layout[key] < min || layout[key] > max)) return false;
     if (layout.density !== undefined && !["compact","comfortable"].includes(layout.density)) return false;
     if (layout.viewMode !== undefined && !["grid","list"].includes(layout.viewMode)) return false;
+    if (layout.autoHide !== undefined && typeof layout.autoHide !== 'boolean') return false;
+    if (layout.autoHideDelay !== undefined && (!Number.isInteger(layout.autoHideDelay) || layout.autoHideDelay < 200 || layout.autoHideDelay > 5000)) return false;
     if (layout.appearance !== undefined) {
       const a = layout.appearance;
       if (!object(a)) return false;

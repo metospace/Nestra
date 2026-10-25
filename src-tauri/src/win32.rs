@@ -1472,6 +1472,10 @@ mod tests {
             apply_desktop_order(hwnd, Some(host.0), Some(marker.0), &[], true, true, false);
             assert_eq!(GetWindowLongPtrW(hwnd, GWL_EXSTYLE), ex_style);
             assert_eq!(GetWindow(hwnd, GW_HWNDNEXT).unwrap_or_default(), marker.0);
+            // Simulate Explorer actually lowering the host before supplying a
+            // Normal snapshot. Leaving it at the front contradicts that state
+            // and depends on live desktop foreground/tooltip ordering.
+            position_without_activation(host.0, HWND_BOTTOM).unwrap();
             let normal = order(&[marker.0.0 as isize, hwnd.0 as isize, host.0.0 as isize]);
             apply_desktop_order(hwnd, Some(host.0), Some(marker.0), &normal, true, true, false);
             assert_eq!(GetWindow(hwnd, GW_HWNDNEXT).unwrap_or_default(), host.0);

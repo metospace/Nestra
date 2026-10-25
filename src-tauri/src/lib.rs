@@ -7,6 +7,8 @@ mod configuration;
 #[cfg(windows)]
 mod desktop_diagnostics;
 #[cfg(windows)]
+mod desktop_hover;
+#[cfg(windows)]
 mod everything;
 #[cfg(windows)]
 mod everything_setup;
@@ -149,6 +151,7 @@ pub fn run() {
             commands::set_mapping_watch_paths,
             commands::search_mapped_folders,
             commands::search_everything,
+            commands::set_desktop_hover_tracking,
             commands::everything_status,
             commands::install_everything,
             commands::start_everything,

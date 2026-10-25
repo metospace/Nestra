@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { motion } from 'motion/react';
 import { Check, CheckCheck, ChevronLeft, ChevronRight, Ellipsis, EyeOff, FolderCog, History, ListChecks, Pencil, RefreshCw, Search, SlidersHorizontal, Trash2, UnfoldVertical, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,6 +8,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { startMove } from '@/composables/useSurfaceDrag';
 import { useItemDrop } from '@/composables/useItemDrag';
 import { useOrganizerLayout } from '@/composables/useOrganizerLayout';
+import { usePanelAutoHide } from '@/composables/usePanelAutoHide';
 import { useFileMoves, openMoveResults } from '@/composables/fileMoveReports';
 import { surfaceAppearance } from '@/domain/presentation';
 import { dropDescription, sourceFor } from '@/domain/sources';
@@ -45,6 +47,8 @@ export default function OrganizerPanel({ panel: rootPanel, items: initialItems }
   const writable = Boolean(activeGroup && sourceFor(activeGroup).writable), dropLabel = activeGroup ? dropDescription(activeGroup) : '全部来源只供浏览；请选择一个可接收文件的来源';
   const drop = useItemDrop(`zone:${rootPanel.key}`, { groupId: activeGroup?.id, mode: writable ? 'move' : 'blocked', label: dropLabel });
   const foldedDrop = useItemDrop(`fold:${rootPanel.key}`, { groupId: activeGroup?.id, mode: writable ? 'move' : 'blocked', label: '收入折叠区', fold: true });
+  const expanded = usePanelAutoHide(rootPanel.key, rootRef, Boolean(layout?.autoHide) && !state.paused, layout?.autoHideDelay ?? 800,
+    more || renaming || renameBusy || batchBusy || state.surfaceSettingsKey === rootPanel.key || drop.isOver || foldedDrop.isOver);
   const visibleIds = visibleEntries.map(entry => entry.id).join('\n');
   useEffect(() => {
     if (store.selectionPanel !== panel.key) return;
@@ -89,7 +93,7 @@ export default function OrganizerPanel({ panel: rootPanel, items: initialItems }
     function end() { document.body.classList.remove('is-gesturing'); setSelectionBox(null); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); window.removeEventListener('pointercancel', end); window.removeEventListener('blur', end); if (root.hasPointerCapture(pointerId)) root.releasePointerCapture(pointerId); disposeBox.current = undefined; }
     disposeBox.current = end; selectPanelItems(panel.key, original); root.setPointerCapture(pointerId); window.addEventListener('pointermove', move); window.addEventListener('pointerup', end); window.addEventListener('pointercancel', end); window.addEventListener('blur', end);
   }
-  return <section ref={element => { rootRef.current = element; drop.setNodeRef(element); }} className={`nestra-panel organizer-auto-layout is-draggable ${drop.isOver ? 'is-drop-target' : ''}`} data-group-id={activeGroup?.id} data-drop-label={dropLabel} data-drop-mode={writable ? 'move' : 'blocked'} data-material={appearance.surfaceMaterial} data-border={appearance.borderStyle} style={surfaceStyle(fit.layout, state.appearance)} onPointerDown={() => bringToFront(rootPanel.key)}>
+  return <motion.section initial={false} animate={{ opacity: expanded ? 1 : 0 }} transition={{ duration: .12 }} ref={element => { rootRef.current = element; drop.setNodeRef(element); }} className={`nestra-panel organizer-auto-layout is-draggable ${drop.isOver ? 'is-drop-target' : ''}`} data-auto-hidden={!expanded ? 'true' : undefined} aria-hidden={!expanded || undefined} data-group-id={activeGroup?.id} data-drop-label={dropLabel} data-drop-mode={writable ? 'move' : 'blocked'} data-material={appearance.surfaceMaterial} data-border={appearance.borderStyle} style={{ ...surfaceStyle(fit.layout, state.appearance), visibility: expanded ? 'visible' : 'hidden', pointerEvents: expanded ? 'auto' : 'none' }} onPointerDown={() => bringToFront(rootPanel.key)}>
     <header className="panel-header organizer-heading select-none" onPointerDown={event => {
       if (renaming || (event.target as HTMLElement).closest('button,input,[role="tab"]')) return;
       bringToFront(rootPanel.key); startMove(event as unknown as PointerEvent, fit.layout, { minWidth: 264, minHeight: 176, commit: value => updateLayout(rootPanel.key, value) });
@@ -128,6 +132,6 @@ export default function OrganizerPanel({ panel: rootPanel, items: initialItems }
     </div>
     {fit.pageCount > 1 && <nav data-organizer-pages className="organizer-pages" aria-label={`${panel.title}项目分页`}><Button size="icon-xs" variant="ghost" aria-label="上一页项目" disabled={currentPage === 0} onClick={() => setPage(value => Math.max(0, value - 1))}><ChevronLeft/></Button><span>{currentPage + 1} / {pageCount} 页 · {visibleEntries.length} 项</span><Button size="icon-xs" variant="ghost" aria-label="下一页项目" disabled={currentPage >= pageCount - 1} onClick={() => setPage(value => Math.min(pageCount - 1, value + 1))}><ChevronRight/></Button></nav>}
     {selectionBox && <div className="selection-box" style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} />}
-  </section>;
+  </motion.section>;
 }
 

@@ -48,6 +48,10 @@ export interface PanelLayout {
   iconSize?: number;
   itemGap?: number;
   labelLines?: number;
+  /** Hide this organizer until the pointer hovers over its saved rectangle. */
+  autoHide?: boolean;
+  /** Delay after leaving the surface, in milliseconds. */
+  autoHideDelay?: number;
   /** Missing fields inherit the global desktop appearance. */
   appearance?: Partial<Omit<AppearanceSettings, "theme">> & { backgroundColor?: string };
   monitorId?: string;

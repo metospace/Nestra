@@ -34,7 +34,7 @@ export default function SurfaceSettings({ panelKey }: { panelKey: string }) {
   return <Dialog open onOpenChange={open => { if (!open) close(); }}>
     <DialogContent className="desktop-surface-settings nestra-hit gap-4 overflow-y-auto" style={{ left: position.left, top: position.top, width: position.width, maxHeight: position.maxHeight, transform: 'none', translate: 'none' }}>
       <DialogHeader><DialogTitle>{title}</DialogTitle><DialogDescription>仅调整此栏 · 修改自动保存</DialogDescription></DialogHeader>
-      <Tabs defaultValue="style"><TabsList className="w-full"><TabsTrigger value="style" className="flex-1">样式</TabsTrigger><TabsTrigger value="layout" className="flex-1">布局</TabsTrigger></TabsList>
+      <Tabs defaultValue="style"><TabsList className="w-full"><TabsTrigger value="style" className="flex-1">样式</TabsTrigger><TabsTrigger value="layout" className="flex-1">布局</TabsTrigger>{panelKey !== 'system:launcher' && <TabsTrigger value="visibility" className="flex-1">显示</TabsTrigger>}</TabsList>
         <TabsContent value="style" className="grid gap-5 pt-3">
           <p className="text-xs leading-relaxed text-muted-foreground">{layout.appearance ? '已设置独立样式；未修改的项目仍跟随全局。' : '跟随全局风格。在这里修改后，仅此栏生效。'}</p>
           <FieldSelect label="材质" value={appearance.surfaceMaterial} options={materials} onChange={value => style('surfaceMaterial', value)} />
@@ -45,6 +45,7 @@ export default function SurfaceSettings({ panelKey }: { panelKey: string }) {
           </div>
           <Button variant="outline" disabled={!layout.appearance} onClick={() => setSurfaceAppearance(panelKey, null)}><RotateCcw />恢复全局风格</Button>
         </TabsContent>
+        {panelKey !== 'system:launcher' && <TabsContent value="visibility" className="grid gap-5 pt-3"><label className="flex items-center justify-between gap-3 text-sm font-medium">自动隐藏<Switch aria-label="自动隐藏此收纳区" checked={Boolean(layout.autoHide)} onCheckedChange={autoHide => presentation({ autoHide })}/></label><p className="text-xs leading-relaxed text-muted-foreground">仅此收纳区生效。关闭时始终显示；开启后，鼠标悬停到原位置显示，移出后隐藏。隐藏时点击可穿透到桌面。</p>{layout.autoHide && <Range label="移出后隐藏延迟" min={200} max={5000} step={100} value={layout.autoHideDelay ?? 800} display={`${((layout.autoHideDelay ?? 800) / 1000).toFixed(1)} 秒`} onChange={autoHideDelay => presentation({ autoHideDelay })}/>}</TabsContent>}
         <TabsContent value="layout" className="grid gap-5 pt-3">
           <div className="grid grid-cols-2 gap-3"><FieldSelect label="排列" value={layout.viewMode ?? 'grid'} options={[{ label: '网格', value: 'grid' }, { label: '列表', value: 'list' }]} onChange={value => presentation({ viewMode: value as 'grid' | 'list' })} /><FieldSelect label="密度" value={layout.density ?? 'comfortable'} options={[{ label: '舒适', value: 'comfortable' }, { label: '紧凑', value: 'compact' }]} onChange={value => presentation({ density: value as 'comfortable' | 'compact' })} /></div>
           {layout.viewMode !== 'list' && <Range label={panelKey === 'system:launcher' ? '网格列数' : '首选列数'} value={layout.columns ?? 4} min={2} max={8} onChange={value => presentation({ columns: value })} />}

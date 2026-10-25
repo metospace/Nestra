@@ -91,6 +91,13 @@ pub async fn search_everything(query: String, limit: usize) -> Result<crate::eve
 }
 
 #[tauri::command]
+pub async fn set_desktop_hover_tracking(window: tauri::WebviewWindow, app: AppHandle, enabled: bool, generation: Option<u64>) -> Result<u64, String> {
+    if window.label() != "desktop" { return Err("悬停检测仅供桌面层使用".into()); }
+    tauri::async_runtime::spawn_blocking(move || crate::desktop_hover::set_enabled(app, enabled, generation))
+        .await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 pub async fn everything_status() -> Result<crate::everything_setup::EverythingStatus, String> {
     tauri::async_runtime::spawn_blocking(crate::everything_setup::status)
         .await.map_err(|error| error.to_string())

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nestra · 收纳区自动隐藏验收</title><link rel="stylesheet" href="./fixture.css"></head><body data-window="desktop"><div id="app"></div><script type="module">
+// Memory-only native cursor events. No hooks, installs or user configuration.
+import { configuration, entry, installFixture, layout, mountFixtureApp } from './mock-native.js';
+const groups=[{id:'dev',name:'开发',dirName:'开发',sourceKind:'zone'},{id:'docs',name:'资料',dirName:'资料',sourceKind:'zone'}];
+let point={x:-1000,y:-1000},generation=0,timer;
+const report=(name,value)=>{const node=document.querySelector(`[data-${name}]`);if(node)node.textContent=JSON.stringify(value);};
+const fixture=installFixture({disk:configuration({customGroups:groups,panelLayouts:{...configuration().panelLayouts,'zone:dev':{...layout(36,90),autoHide:true,autoHideDelay:800},'zone:docs':layout(460,90)}}),files:groups.flatMap(group=>['项目 A.txt','项目 B.txt','项目 C.txt'].map(name=>entry(name,group.name))),commands:{
+  set_desktop_hover_tracking:({enabled,generation:previous})=>{
+    if(enabled){generation++;if(timer)clearInterval(timer);const own=generation;timer=setInterval(()=>fixture.emit('nestra://desktop-pointer',{generation:own,cursor:{x:point.x*devicePixelRatio,y:point.y*devicePixelRatio},origin:{x:0,y:0}}),100);}
+    else if(previous===generation){clearInterval(timer);timer=undefined;}
+    report('tracking',{active:!!timer,generation});return enabled?generation:0;
+  },
+  set_hit_rects:({rects})=>report('hit-report',rects),
+}});
+const React=await import('react'),{useNestra,setPanelPresentation,openSurfaceSettings}=await import('/src/stores/state.ts'),h=React.createElement;
+function Controls(){const state=useNestra();return h('div',null,h('strong',null,'独立自动隐藏 · 内存模拟验收'),h('div',null,
+  h('button',{onClick:()=>{point={x:100,y:150};}},'模拟悬停开发区'),h('button',{onClick:()=>{point={x:-1000,y:-1000};}},'模拟移出所有区域'),
+  h('button',{onClick:()=>openSurfaceSettings('zone:dev')},'开发区独立设置'),h('button',{onClick:()=>setPanelPresentation('zone:docs',{autoHide:true})},'资料区也启用隐藏'),
+  h('button',{onClick:()=>{setPanelPresentation('zone:dev',{autoHide:false});setPanelPresentation('zone:docs',{autoHide:false});}},'关闭所有自动隐藏'),
+  h('button',{onClick:()=>fixture.emit('nestra://reveal-surface','zone:dev')},'临时查看开发区')),
+  h('output',{'aria-label':'配置状态'},JSON.stringify({dev:state.panelLayouts['zone:dev'],docs:state.panelLayouts['zone:docs']})),
+  h('output',{'aria-label':'后台检测','data-tracking':true},'等待检测'),h('output',{'aria-label':'原生命中区域','data-hit-report':true},'等待同步'));}
+await mountFixtureApp(Controls);
+document.querySelector('.fixture-controls')?.classList.remove('nestra-hit');
+</script></body></html>

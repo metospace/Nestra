@@ -6,6 +6,7 @@ import { ArrowRight, Ban, Link, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import StatusNotice from '@/components/StatusNotice';
 import { installDesktopInputFocus } from '@/composables/desktopInputFocus';
+import { revealAutoHidePanel } from '@/composables/desktopPointer';
 import { useItemDrop, type DragAction } from '@/composables/useItemDrag';
 import { grantDesktopInput, releaseDesktopInput, showManager } from '@/lib/tauri';
 import { addCustomGroup, createWidget, dropPaths, getItemsByPanel, getVisibleDesktopPanels, initialize, isExitFrozen, LAUNCHER_PANEL_KEY, rescan, scheduleHitRectSync, showStatus, store, useNestra } from '@/stores/state';
@@ -24,7 +25,7 @@ export default function DesktopLayer() {
   const desktopDrop = useItemDrop('desktop-return', { mode: 'return', label: '放回桌面（移动文件）' });
   async function createZone() { if (creatingRef.current || isExitFrozen()) return; creatingRef.current = true; setCreatingZone(true); try { await addCustomGroup(`收纳区 ${store.customGroups.length + 1}`); } finally { creatingRef.current = false; setCreatingZone(false); } }
   useEffect(() => {
-    let disposed = false, unlisten: (() => void) | undefined, unlistenDrag: (() => void) | undefined;
+    let disposed = false, unlisten: (() => void) | undefined, unlistenDrag: (() => void) | undefined, unlistenReveal: (() => void) | undefined;
     const disposeInput = installDesktopInputFocus(grantDesktopInput, releaseDesktopInput, () => showStatus('暂时无法获取键盘焦点，请重新点击输入框'));
     const observer = new MutationObserver(() => scheduleHitRectSync());
     async function whenReady(action: () => void) { while (!store.ready && !disposed) await new Promise(resolve => window.setTimeout(resolve, 120)); if (!disposed && !isExitFrozen()) action(); }
@@ -36,6 +37,8 @@ export default function DesktopLayer() {
       else if (action === 'refresh') void rescan().then(() => showStatus('桌面索引已刷新'));
     }
     void (async () => {
+      const stopReveal = await listen<string>('nestra://reveal-surface', event => revealAutoHidePanel(event.payload));
+      if (disposed) { stopReveal(); return; } unlistenReveal = stopReveal;
       const stopTray = await listen<string>('nestra://tray', event => { void whenReady(() => tray(event.payload)); });
       if (disposed) { stopTray(); return; } unlisten = stopTray;
       const stopDrag = await getCurrentWebview().onDragDropEvent(event => {
@@ -59,7 +62,7 @@ export default function DesktopLayer() {
       await initialize(); if (disposed) return;
       observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['style', 'class'] }); scheduleHitRectSync();
     })().catch(error => { if (!disposed) showStatus(`桌面初始化失败：${error}`); });
-    return () => { disposed = true; document.body.classList.remove('is-external-dragging'); disposeInput(); observer.disconnect(); unlisten?.(); unlistenDrag?.(); };
+    return () => { disposed = true; document.body.classList.remove('is-external-dragging'); disposeInput(); observer.disconnect(); unlisten?.(); unlistenDrag?.(); unlistenReveal?.(); };
   }, []);
   useEffect(() => { scheduleHitRectSync(); }, [state]);
   const items = getItemsByPanel(), HintIcon = externalHint?.kind === 'reference' ? Link : externalHint?.kind === 'move' ? ArrowRight : Ban;

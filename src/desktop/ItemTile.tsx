@@ -21,6 +21,7 @@ export function tileActivation(event: { detail: number; ctrlKey: boolean; metaKe
 export default function ItemTile({ entry, folded, panelKey = '', compact, list, hit, selectionOrder, singleClick }: ItemTileProps) {
   const state = useNestra();
   const opening = useRef(false);
+  const [nativeMenuOpen, setNativeMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false), [renameValue, setRenameValue] = useState(''), [renameBusy, setRenameBusy] = useState(false);
   const nameInput = useRef<HTMLInputElement>(null), menuPoint = useRef({ screenX: 0, screenY: 0 });
   const managed = canManageEntry(entry), singleClickLaunch = singleClick ?? (Boolean(panelKey) && entry.isApplication);
@@ -39,6 +40,7 @@ export default function ItemTile({ entry, folded, panelKey = '', compact, list, 
   }
   function rename() { setRenameValue(entry.name); setRenaming(true); }
   async function systemMenu() {
+    setNativeMenuOpen(true);
     try {
       const dpr = window.devicePixelRatio || 1;
       const result = await showShellMenu({ path: entry.path, x: Math.round(menuPoint.current.screenX * dpr), y: Math.round(menuPoint.current.screenY * dpr), toDesktop: Boolean(entry.zone) && managed, inLauncher: isLauncher(entry.id), canFold: Boolean(panelKey) && !folded, canRename: managed });
@@ -47,7 +49,7 @@ export default function ItemTile({ entry, folded, panelKey = '', compact, list, 
       else if (result === 'fold' && panelKey) foldItem(panelKey, entry.id);
       else if (result === 'rename') rename();
       else if (result === 'invoked') window.setTimeout(() => void rescan(), 500);
-    } catch { showStatus('无法打开系统菜单，请重新右键后重试'); }
+    } catch { showStatus('无法打开系统菜单，请重新右键后重试'); } finally { setNativeMenuOpen(false); }
   }
   async function submitRename() {
     const name = renameValue.trim(); if (!name || renameBusy) return;
@@ -59,7 +61,7 @@ export default function ItemTile({ entry, folded, panelKey = '', compact, list, 
       <ContextMenuTrigger asChild>
         <button ref={node => { drag.setNodeRef(node); drop.setNodeRef(node); }} type="button" {...drag.attributes} {...drag.listeners} data-desktop-input
           className={['tile', state.selectionPanel === panelKey && state.selectedItemIds.includes(entry.id) ? 'is-selected' : '', folded ? 'is-folded' : '', compact ? 'compact' : '', list ? 'is-list' : '', hit ? 'nestra-hit' : '', drag.isDragging ? 'is-dragging' : ''].join(' ')}
-          data-item-id={entry.id} draggable={false} title={`${entry.name}\n${entry.sourceLabel}`} onDragStart={event => event.preventDefault()}
+          data-item-id={entry.id} data-native-menu-open={nativeMenuOpen || undefined} draggable={false} title={`${entry.name}\n${entry.sourceLabel}`} onDragStart={event => event.preventDefault()}
           onClick={select} onDoubleClick={event => { if (tileActivation(event, singleClickLaunch, true) === 'open') void safeOpen(); }}
           onContextMenuCapture={event => { menuPoint.current = { screenX: event.screenX, screenY: event.screenY }; }}>
           {entry.isFresh && <span className="fresh-dot" />}

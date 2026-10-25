@@ -52,6 +52,13 @@ test('configuration restore preserves owned directories, all absent sources and 
  const current=config(),incoming=config();incoming.customGroups=[{id:'zone',name:'别名',dirName:'other',mappedPath:'D:/Other'},{id:'new',name:'新',dirName:'新'}];incoming.startWithWindows=false;
  const next=context.prepareRestore(current,incoming);assert.equal(next.customGroups.find(g=>g.id==='zone').dirName,'文档');assert.equal(next.customGroups.find(g=>g.id==='zone').mappedPath,undefined);assert.ok(next.customGroups.find(g=>g.id==='map'));assert.ok(next.customGroups.find(g=>g.id==='new'));assert.equal(next.startWithWindows,true);assert.equal(next.coexistMigrated,true);
 });
+test('auto-hide remains an independent persisted layout option and validates delay bounds',()=>{
+ const saved=config();saved.panelLayouts['zone:zone'].autoHide=true;saved.panelLayouts['zone:zone'].autoHideDelay=900;saved.panelLayouts['zone:zone'].visible=true;
+ assert.doesNotThrow(()=>context.validateConfiguration(saved));const restored=context.migrateConfiguration(saved);
+ assert.equal(restored.panelLayouts['zone:zone'].autoHide,true);assert.equal(restored.panelLayouts['zone:zone'].autoHideDelay,900);assert.equal(restored.panelLayouts['zone:zone'].visible,true);
+ for(const value of ['true',1,null]){const invalid=config();invalid.panelLayouts['zone:zone'].autoHide=value;assert.throws(()=>context.validateConfiguration(invalid));}
+ for(const value of [0,199,5001,400.5,'800']){const invalid=config();invalid.panelLayouts['zone:zone'].autoHideDelay=value;assert.throws(()=>context.validateConfiguration(invalid));}
+});
 test('imports reject unsupported versions, dangerous nested keys, invalid layouts and malformed todo data',()=>{
  for(const mutate of [c=>c.schemaVersion=3,c=>c.panelLayouts.x={x:1,y:1,width:0,height:10,zIndex:1},c=>c.launcherReferences=JSON.parse('{"__proto__":{}}'),c=>c.widgets=[{id:'w',kind:'todo',title:'待办',content:'',layout:c.panelLayouts['zone:zone'],todos:[{id:'t',text:42,completed:false}]}],c=>c.customGroups[0].dirName='../outside',c=>c.tabGroups.push({...c.tabGroups[0]})]){const c=config();mutate(c);assert.throws(()=>context.validateConfiguration(c));}
 });
