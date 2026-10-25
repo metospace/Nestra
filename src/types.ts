@@ -52,6 +52,8 @@ export interface PanelLayout {
   autoHide?: boolean;
   /** Delay after leaving the surface, in milliseconds. */
   autoHideDelay?: number;
+  /** Dragging a resize handle disables automatic sizing for this organizer. */
+  autoSize?: boolean;
   /** Missing fields inherit the global desktop appearance. */
   appearance?: Partial<Omit<AppearanceSettings, "theme">> & { backgroundColor?: string };
   monitorId?: string;

@@ -21,6 +21,20 @@ export function fitOrganizer(layout: PanelLayout, count: number, bounds: Surface
   const horizontalInsets = 18;
   const maxColumns = layout.viewMode === 'list' ? 1 : Math.max(1, Math.floor((maxWidth - horizontalInsets + metrics.gap) / (metrics.tileWidth + metrics.gap)));
   const safeCount = Math.max(0, Math.floor(count));
+  if (layout.autoSize === false) {
+    const width = Math.min(maxWidth, Math.max(264, layout.width));
+    const columns = layout.viewMode === 'list' ? 1 : Math.max(1, Math.floor((width - horizontalInsets + metrics.gap) / (metrics.tileWidth + metrics.gap)));
+    const base = chromeHeight + paddingY + 2;
+    const minHeight = base + metrics.tileHeight + (safeCount > columns ? 34 : 0);
+    const height = Math.min(maxHeight, Math.max(layout.height, minHeight));
+    const rowsWithoutPager = Math.max(1, Math.floor((height - base + metrics.gap) / (metrics.tileHeight + metrics.gap)));
+    const pagerHeight = safeCount > columns * rowsWithoutPager ? 34 : 0;
+    const rows = Math.max(1, Math.floor((height - base - pagerHeight + metrics.gap) / (metrics.tileHeight + metrics.gap)));
+    const x = Math.max(bounds.x + margin, Math.min(layout.x, bounds.x + bounds.width - margin - width));
+    const y = Math.max(bounds.y + margin, Math.min(layout.y, bounds.y + bounds.height - margin - height));
+    return { layout: { ...layout, x, y, width, height }, columns, rows, minHeight,
+      pageSize: columns * rows, pageCount: Math.max(1, Math.ceil(safeCount / (columns * rows))), ...metrics };
+  }
   const preferred = layout.viewMode === 'list' ? 1 : Math.min(Math.max(1, safeCount), Math.max(1, layout.columns ?? 4), maxColumns);
   const rowsAvailable = (pager: number) => Math.max(1, Math.floor((maxHeight - chromeHeight - paddingY - 2 - pager + metrics.gap) / (metrics.tileHeight + metrics.gap)));
   let maxRows = rowsAvailable(0);
@@ -33,6 +47,7 @@ export function fitOrganizer(layout: PanelLayout, count: number, bounds: Surface
   const height = Math.min(maxHeight, Math.max(142, chromeHeight + paddingY + 2 + rows * metrics.tileHeight + (rows - 1) * metrics.gap + pagerHeight));
   const x = Math.max(bounds.x + margin, Math.min(layout.x, bounds.x + bounds.width - margin - width));
   const y = Math.max(bounds.y + margin, Math.min(layout.y, bounds.y + bounds.height - margin - height));
-  return { layout: { ...layout, x, y, width, height }, columns, rows, pageSize: columns * rows,
+  const minHeight = chromeHeight + paddingY + 2 + metrics.tileHeight + (safeCount > columns ? 34 : 0);
+  return { layout: { ...layout, x, y, width, height }, columns, rows, minHeight, pageSize: columns * rows,
     pageCount: Math.max(1, Math.ceil(safeCount / (columns * rows))), ...metrics };
 }

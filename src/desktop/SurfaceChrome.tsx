@@ -22,7 +22,7 @@ const handles: { direction: ResizeDirection; className: string }[] = [
 ];
 export function ResizeHandles({ layout, commit, onStart, minWidth = 264, minHeight = 176 }: { layout: PanelLayout; commit: (layout: Partial<PanelLayout>) => void; onStart: () => void; minWidth?: number; minHeight?: number }) {
   if (layout.locked) return null;
-  return handles.map(handle => <div key={handle.direction} className={`resize-handle absolute ${handle.className}`} onPointerDown={event => {
+  return handles.map(handle => <div key={handle.direction} data-resize-direction={handle.direction} className={`resize-handle absolute ${handle.className}`} onPointerDown={event => {
     event.stopPropagation(); onStart(); startResize(event as unknown as PointerEvent, handle.direction, layout, { minWidth, minHeight, commit });
   }} />);
 }

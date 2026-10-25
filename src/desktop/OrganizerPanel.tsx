@@ -17,7 +17,7 @@ import { showManager } from '@/lib/tauri';
 import { batchMoveItems, batchReturnItems, bringToFront, confirmDialog, getItemsByPanel, getSelectedEntries, openSurfaceSettings, pinEntry, removeCustomGroup, removeTabGroup, renameCustomGroup, renameTabGroup, rescan, selectPanelItems, setActiveTab, setPanelVisible, showStatus, store, toggleFoldVisibility, updateGroupView, updateLayout, useNestra } from '@/stores/state';
 import type { CustomGroupDefinition, DesktopEntry, Panel } from '@/types';
 import ItemTile from './ItemTile';
-import { IconButton, surfaceStyle } from './SurfaceChrome';
+import { IconButton, ResizeHandles, surfaceStyle } from './SurfaceChrome';
 
 export default function OrganizerPanel({ panel: rootPanel, items: initialItems }: { panel: Panel; items: DesktopEntry[] }) {
   const state = useNestra(), fileMoves = useFileMoves();
@@ -58,7 +58,7 @@ export default function OrganizerPanel({ panel: rootPanel, items: initialItems }
   useEffect(() => { if (renaming) { nameInput.current?.focus(); nameInput.current?.select(); } }, [renaming]);
   useEffect(() => { if (searchVisible) searchInput.current?.focus(); }, [searchVisible]);
   useEffect(() => () => disposeBox.current?.(), []);
-  useEffect(() => { setPage(0); }, [localQuery, activeGroup?.id, aggregateFilter, showFolded]);
+  useEffect(() => { setPage(0); }, [localQuery, activeGroup?.id, aggregateFilter, showFolded, pageSize]);
   useEffect(() => {
     if (!layout || !fit) return;
     const { x, y, width, height } = fit.layout;
@@ -132,6 +132,7 @@ export default function OrganizerPanel({ panel: rootPanel, items: initialItems }
     </div>
     {fit.pageCount > 1 && <nav data-organizer-pages className="organizer-pages" aria-label={`${panel.title}项目分页`}><Button size="icon-xs" variant="ghost" aria-label="上一页项目" disabled={currentPage === 0} onClick={() => setPage(value => Math.max(0, value - 1))}><ChevronLeft/></Button><span>{currentPage + 1} / {pageCount} 页 · {visibleEntries.length} 项</span><Button size="icon-xs" variant="ghost" aria-label="下一页项目" disabled={currentPage >= pageCount - 1} onClick={() => setPage(value => Math.min(pageCount - 1, value + 1))}><ChevronRight/></Button></nav>}
     {selectionBox && <div className="selection-box" style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} />}
+    <ResizeHandles layout={fit.layout} minHeight={fit.minHeight} commit={value => updateLayout(rootPanel.key, { ...value, autoSize: false })} onStart={() => bringToFront(rootPanel.key)}/>
   </motion.section>;
 }
 

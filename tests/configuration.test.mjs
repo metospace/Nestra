@@ -77,3 +77,5 @@ test('restoring a directory from a backup with an old identity reconnects the ex
  const current=config(),incoming=config();incoming.customGroups[0].id='old-zone';incoming.tabGroups[0].groupIds[0]='old-zone';incoming.tabGroups[0].activeGroupId='old-zone';incoming.panelLayouts['zone:old-zone']=incoming.panelLayouts['zone:zone'];delete incoming.panelLayouts['zone:zone'];
  const next=context.prepareRestore(current,incoming);assert.equal(next.customGroups.filter(g=>g.dirName==='文档').length,1);assert.equal(next.tabGroups[0].activeGroupId,'zone');assert.ok(next.panelLayouts['zone:zone']);assert.equal(next.panelLayouts['zone:old-zone'],undefined);
 });
+
+test('manual organizer sizing is persisted independently and rejects non-boolean sizing modes',()=>{const saved=config();saved.panelLayouts['zone:zone'].autoSize=false;assert.doesNotThrow(()=>context.validateConfiguration(saved));const restored=context.migrateConfiguration(saved);assert.equal(restored.panelLayouts['zone:zone'].autoSize,false);for(const value of [null,'false',1]){const invalid=config();invalid.panelLayouts['zone:zone'].autoSize=value;assert.throws(()=>context.validateConfiguration(invalid));}});

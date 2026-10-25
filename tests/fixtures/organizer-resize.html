@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nestra · 手动拉伸验收</title><link rel="stylesheet" href="./fixture.css"></head><body data-window="desktop"><div id="app"></div><script type="module">
+import { configuration, entry, installFixture, layout, mountFixtureApp } from './mock-native.js';
+const group={id:'resize',name:'开发',dirName:'开发',sourceKind:'zone'};
+const fixture=installFixture({disk:configuration({customGroups:[group],panelLayouts:{...configuration().panelLayouts,'zone:resize':{...layout(36,60,336,240),columns:4,iconSize:64,itemGap:12,labelLines:2}}}),files:Array.from({length:18},(_,i)=>entry(`项目 ${i+1}.txt`,'开发')),commands:{list_displays:()=>[{id:'main',name:'验收显示器',x:0,y:0,width:innerWidth,height:innerHeight,isPrimary:true}]}});
+const React=await import('react'),{rescan,setPanelPresentation,openSurfaceSettings,useNestra}=await import('/src/stores/state.ts'),h=React.createElement;
+function Controls(){const state=useNestra();return h('details',{open:true},h('summary',null,'手动拉伸验收 · 内存数据'),h('button',{onClick:()=>{fixture.state.files.push(entry(`新增 ${fixture.state.files.length+1}.txt`,'开发'));void rescan();}},'添加一个项目'),h('button',{onClick:()=>setPanelPresentation('zone:resize',{autoSize:true})},'恢复自动大小'),h('button',{onClick:()=>openSurfaceSettings('zone:resize')},'打开此栏设置'),h('output',{'aria-label':'拉伸配置'},JSON.stringify(state.panelLayouts['zone:resize'])));}
+await mountFixtureApp(Controls);
+</script><style>.fixture-controls{left:auto;right:12px;top:12px;bottom:auto;width:240px;max-height:300px}</style></body></html>
