@@ -42,6 +42,7 @@ export function installFixture({ label = 'desktop', disk: initialDisk, files: in
       if (command === 'resolve_icon_pairs') return {};
       if (['scan_applications', 'scan_folder', 'recent_launches', 'list_file_moves', 'list_configuration_backups', 'search_mapped_folders', 'clip_load'].includes(command)) return [];
       if (command === 'search_everything') return { available: false, message: '示例数据 · 未连接 Everything', total: 0, entries: [] };
+      if (command === 'everything_status') return { installed: false, running: false, installPath: null, defaultInstallDir: 'D:\\Apps\\Everything', phase: 'idle', downloadedBytes: 0, totalBytes: null, message: '未检测到 Everything' };
       if (command === 'get_paused') return state.paused;
       if (command === 'set_paused') { state.paused = args.paused; return args.paused; }
       if (command === 'start_with_windows') return false;

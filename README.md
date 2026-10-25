@@ -85,8 +85,13 @@ This is the Tauri port of the original WPF app (`E:\技能包\Guidesk.App`).
 桌面顶部也提供新建、搜索、管理入口。隐藏面板后可在管理器重新启用。
 重复运行程序会打开已有管理器；开机启动使用 `--background` 留在托盘。
 
-索引搜索需要安装并运行 [Everything](https://www.voidtools.com/downloads/)
-（1.4.1 及以上，默认实例；也识别旧 1.5a 默认实例）。仅启动 Everything Service
+索引搜索需要安装并运行 [Everything](https://www.voidtools.com/downloads/)。
+控制中心「系统 → 全局搜索」及搜索页会区分未安装、已安装未运行和已连接；
+未安装时可选择 C 盘以外的目录，点击「下载并安装 Everything」自动下载官方稳定版、
+校验并安装。安装索引服务时可能出现 Windows 管理员权限提示，确认后继续后台安装。
+已安装时提供启动按钮，不重复覆盖安装。详见 [Everything 安装集成](docs/EVERYTHING_SETUP.md)。
+
+支持 1.4.1 及以上的默认实例，也识别旧 1.5a 默认实例。仅启动 Everything Service
 不等于运行搜索程序，需保留 Everything 主程序在后台，并启用 IPC。
 无需 `es.exe`、SDK DLL 或 HTTP 服务。支持 Everything 查询语法，如 `ext:pdf 报告`；
 搜索的是索引覆盖的文件名/路径，不代表全文检索或尚未索引的所有磁盘。

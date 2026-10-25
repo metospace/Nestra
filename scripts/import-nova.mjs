@@ -15,6 +15,10 @@ for (const name of names) {
     source = source.replace(/data-slot="(button|checkbox|switch|tabs-trigger|select-trigger|slider-thumb|dialog-content|alert-dialog-content|popover-content|dropdown-menu-content|dropdown-menu-sub-content|context-menu-content|context-menu-sub-content)"/g, 'data-slot="$1" data-desktop-input');
     source = source.replace(/data-slot="(select-content|select-item|dropdown-menu-item|dropdown-menu-checkbox-item|dropdown-menu-radio-item|dropdown-menu-sub-trigger|context-menu-item|context-menu-checkbox-item|context-menu-radio-item|context-menu-sub-trigger)"/g, 'data-slot="$1" data-desktop-input');
     source = source.replaceAll('<span className="sr-only">Close</span>', '<span className="sr-only">关闭</span>');
+    // The registry consumes value for its indicator; Radix also needs it for ARIA.
+    if (name === 'progress' && !/<ProgressPrimitive\.Root[\s\S]*?value=\{value\}/.test(source)) {
+      source = source.replace('data-slot="progress"', 'data-slot="progress"\n      value={value}');
+    }
     if (['dropdown-menu','context-menu','popover','select'].includes(name)) {
       source = `import { useDesktopPopupBoundary } from "@/components/ui/desktop-portal-plane"\n${source}`;
       const primitive = {'dropdown-menu':'DropdownMenu','context-menu':'ContextMenu',popover:'Popover',select:'Select'}[name];

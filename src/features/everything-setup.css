@@ -1,0 +1,15 @@
+.everything-setup { display: grid; gap: 12px; min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--background); }
+.everything-setup-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.everything-setup-heading strong { font-weight: 600; font-size: 13px; }
+.everything-setup-heading p, .everything-setup-hint, .everything-setup-source { margin: 4px 0 0; color: var(--muted-foreground); font-size: 12px; line-height: 1.6; }
+.everything-setup-source { margin: 0; }
+.everything-install-path { display: grid; gap: 6px; }
+.everything-install-path label { font-size: 12px; font-weight: 500; }
+.everything-install-path > div { display: flex; gap: 8px; }
+.everything-install-path input { min-width: 0; }
+.everything-setup-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.everything-setup-progress { display: grid; gap: 8px; font-size: 12px; }
+.everything-setup-progress > span { display: flex; align-items: center; gap: 6px; }
+.everything-setup-error { margin: 0; color: var(--destructive); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.everything-setup.is-compact { margin: 0 14px 10px; padding: 12px; gap: 8px; flex-shrink: 0; }
+.everything-setup.is-compact .everything-setup-heading p { display: none; }

@@ -90,6 +90,24 @@ pub async fn search_everything(query: String, limit: usize) -> Result<crate::eve
         .await.map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+pub async fn everything_status() -> Result<crate::everything_setup::EverythingStatus, String> {
+    tauri::async_runtime::spawn_blocking(crate::everything_setup::status)
+        .await.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn install_everything(install_dir: String) -> Result<crate::everything_setup::EverythingStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::everything_setup::install(&install_dir))
+        .await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn start_everything() -> Result<crate::everything_setup::EverythingStatus, String> {
+    tauri::async_runtime::spawn_blocking(crate::everything_setup::start)
+        .await.map_err(|error| error.to_string())?
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DisplayInfo {

@@ -46,6 +46,20 @@ export function searchEverything(query: string, limit = 80): Promise<EverythingS
   return invoke("search_everything", { query, limit });
 }
 
+export interface EverythingStatus {
+  installed: boolean;
+  running: boolean;
+  installPath: string | null;
+  defaultInstallDir: string | null;
+  phase: 'idle' | 'downloading' | 'verifying' | 'installing' | 'starting' | 'ready' | 'error';
+  downloadedBytes: number;
+  totalBytes: number | null;
+  message: string;
+}
+export const getEverythingStatus = (): Promise<EverythingStatus> => invoke('everything_status');
+export const installEverything = (installDir: string): Promise<EverythingStatus> => invoke('install_everything', { installDir });
+export const startEverything = (): Promise<EverythingStatus> => invoke('start_everything');
+
 export function pickFolder(): Promise<string | null> {
   return invoke("pick_folder");
 }

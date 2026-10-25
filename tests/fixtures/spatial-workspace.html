@@ -24,6 +24,7 @@ window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'manager'},currentWeb
   if(command==='resolve_icon_pairs')return {};
   if(['scan_applications','scan_folder','recent_launches','list_file_moves','list_configuration_backups','list_storage_zones','search_mapped_folders','clip_load'].includes(command))return [];
   if(command==='search_everything'){if(flags.has('searchHold')&&args.query?.trim())return new Promise(resolve=>pendingSearch.push(resolve));return {available:false,message:'验收环境 · 本地内容搜索',total:0,entries:[]};}
+  if(command==='everything_status')return {installed:false,running:false,installPath:null,defaultInstallDir:'D:\\Apps\\Everything',phase:'idle',downloadedBytes:0,totalBytes:null,message:'未检测到 Everything'};
   if(command==='plugin:window|hide'){document.querySelector('[aria-label="桌面查看验收记录"]')?.append(' · 已调用隐藏管理窗口');return;}
   if(['start_with_windows','get_paused'].includes(command))return false;
   if(command==='plugin:event|listen')return ++callbackId;

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nestra · Everything 安装验收</title></head><body data-window="manager"><div id="app"></div>
+<script type="module">
+// Memory-only acceptance scenarios. Never downloads, installs, or calls native code.
+import { configuration, installFixture, mountFixtureApp } from './mock-native.js';
+const flags = new URLSearchParams(location.search);
+const installed = flags.has('stopped') || flags.has('running');
+let status = { installed, running: flags.has('running'), installPath: installed ? 'D:\\Apps\\Everything\\Everything.exe' : null,
+  defaultInstallDir: 'D:\\Apps\\Everything', phase: 'idle', downloadedBytes: 0, totalBytes: null,
+  message: installed ? (flags.has('running') ? 'Everything 已连接' : 'Everything 已安装，尚未运行') : '未检测到 Everything' };
+let installAttempts = 0;
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+const snapshot = () => structuredClone(status);
+const commands = {
+  everything_status: snapshot,
+  pick_folder: () => 'D:\\Apps\\Everything',
+  search_everything: () => ({ available: status.running, message: status.running ? 'Everything 已连接 · 输入关键词搜索索引' : status.message, total: 0, entries: [] }),
+  install_everything: async ({ installDir }) => {
+    if (!installDir.startsWith('D:\\')) throw Error('验收只允许 D 盘示例目录');
+    installAttempts++;
+    status = { ...status, phase: 'downloading', downloadedBytes: 524288, totalBytes: 1999112, message: '正在从 voidtools 下载 Everything…' };
+    await pause(1700);
+    if (flags.has('fail') && installAttempts === 1) {
+      status = { ...status, phase: 'error', message: '下载失败，请检查网络连接后重试' };
+      return snapshot();
+    }
+    status = { ...status, phase: 'verifying', downloadedBytes: 1999112, message: '正在校验安装包…' };
+    await pause(900);
+    status = { ...status, phase: 'installing', message: '正在安装，请在 Windows 权限提示中允许继续…' };
+    await pause(1200);
+    status = { ...status, installed: true, installPath: `${installDir}\\Everything.exe`, phase: 'starting', message: '正在启动 Everything…' };
+    await pause(900);
+    status = { ...status, running: true, phase: 'ready', message: 'Everything 已连接，可搜索全盘文件' };
+    return snapshot();
+  },
+  start_everything: async () => {
+    status = { ...status, phase: 'starting', message: '正在启动 Everything…' };
+    await pause(1200);
+    status = { ...status, running: true, phase: 'ready', message: 'Everything 已连接，可搜索全盘文件' };
+    return snapshot();
+  },
+};
+// Match production: accepted actions return immediately and continue in the background.
+for (const action of ['install_everything', 'start_everything']) {
+  const task = commands[action];
+  commands[action] = (...args) => { void task(...args).catch(error => { status = { ...status, phase: 'error', message: String(error) }; }); return snapshot(); };
+}
+installFixture({ label: flags.has('compact') ? 'search' : 'manager', disk: configuration(), commands });
+await mountFixtureApp();
+</script></body></html>

@@ -8,9 +8,11 @@ import { Slider } from '@/components/ui/slider';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import NestraLogo from '@/components/NestraLogo';
 import SearchPanel from '@/features/SearchPanel';
+import EverythingSetup from '@/features/EverythingSetup';
+import { refreshEverythingStatus } from '@/stores/everythingSetup';
 import StatusNotice from '@/components/StatusNotice';
 import { confirmDialog, useGlobalAppearanceForAll, initialize, refreshDisplays, rescan, setAppearance, setHideNativeIcons, setPaused, setStartWithWindows, showStatus, useNestra } from '@/stores/state';
-import { requestOpenSearch, searchEverything } from '@/lib/tauri';
+import { requestOpenSearch } from '@/lib/tauri';
 import WorkspaceOverview from './WorkspaceOverview';
 import FileManagement from './FileManagement';
 import LauncherManagement from './LauncherManagement';
@@ -41,14 +43,13 @@ export default function ManagerApp() {
   const [initialId, setInitialId] = useState('');
   const [addSignal, setAddSignal] = useState(0);
   const [creationKind, setCreationKind] = useState<'zone' | 'folder'>();
-  const [provider, setProvider] = useState('正在检测 Everything…');
   const [refreshing, setRefreshing] = useState(false);
   const reducedMotion = useReducedMotion();
   const main = useRef<HTMLElement>(null);
   const currentWindow = getCurrentWebviewWindow();
   const navigate = (id: string, objectId?: string) => { if (sections.some(item => item.id === id)) setSection(id as SectionId); setInitialId(objectId ?? ''); setAddSignal(0); };
   const add = (kind?: 'zone' | 'folder') => { setCreationKind(kind); setInitialId(''); setSection('files'); setAddSignal(value => value + 1); };
-  const refresh = async () => { setRefreshing(true); try { await rescan(); await refreshDisplays(); setProvider((await searchEverything('')).message); } catch (error) { showStatus(`刷新失败：${error}`); } finally { setRefreshing(false); } };
+  const refresh = async () => { setRefreshing(true); try { await rescan(); await refreshDisplays(); await refreshEverythingStatus(true); } catch (error) { showStatus(`刷新失败：${error}`); } finally { setRefreshing(false); } };
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
@@ -87,7 +88,7 @@ export default function ManagerApp() {
           {section === 'data' && <DataManagement/>}
           {section === 'search' && <><PageHeading title="搜索" description="查找桌面、收纳区、映射目录、已安装应用和全盘索引中的内容。"/><SearchPanel/></>}
           {section === 'appearance' && <><PageHeading title="全局外观" description="统一桌面面板的默认风格，也可以为单个收纳栏保留独立样式。"><Button variant="outline" disabled={!independentCount} onClick={() => void unifyAppearance()}>统一所有收纳栏</Button></PageHeading><div className="appearance-columns"><Section title="默认样式" description={independentCount ? `${independentCount} 个收纳栏设有独立样式。` : '所有收纳栏均跟随全局风格。'}><div className="form-stack"><Field label="主题"><FormSelect label="主题" value={store.appearance.theme ?? 'light'} options={[{ label: '浅色', value: 'light' }, { label: '深色', value: 'dark' }]} onValueChange={value => appearance('theme', value)}/></Field><Field label="桌面材质"><FormSelect label="桌面材质" value={store.appearance.surfaceMaterial} options={materials} onValueChange={value => appearance('surfaceMaterial', value)}/></Field><Field label="圆角"><FormSelect label="圆角" value={store.appearance.cornerStyle} options={[{ label: '方正', value: 'square' }, { label: '紧凑', value: 'compact' }, { label: '标准', value: 'standard' }, { label: '圆润', value: 'rounded' }]} onValueChange={value => appearance('cornerStyle', value)}/></Field><Field label="边界"><FormSelect label="边界" value={store.appearance.borderStyle} options={[{ label: '无边框', value: 'none' }, { label: '细线', value: 'subtle' }, { label: '清晰边框', value: 'strong' }, { label: '阴影', value: 'shadow' }]} onValueChange={value => appearance('borderStyle', value)}/></Field><Field label={`面板不透明度 · ${Math.round(store.appearance.panelOpacity * 100)}%`}><Slider value={[store.appearance.panelOpacity]} min={.45} max={1} step={.01} aria-label="面板不透明度" onValueChange={value => appearance('panelOpacity', value[0])}/></Field></div></Section><div className="appearance-preview"><span className="field-label">实时预览</span><div className="nestra-panel preview-surface" data-material={store.appearance.surfaceMaterial} data-border={store.appearance.borderStyle}><header className="panel-header"><strong>项目资料</strong><span>3 项</span></header><div className="preview-files">{['设计稿', '项目文档', '待处理'].map(name => <div key={name}><FileText/><span>{name}</span></div>)}</div></div><p className="field-hint">默认风格同步到桌面；已独立设置的项目保持自己的样式。</p></div></div></>}
-          {section === 'system' && <><PageHeading title="系统" description="管理桌面层、Windows 启动行为与搜索服务。"/><Section title="桌面与启动"><div className="settings-row"><div><h3>显示桌面内容</h3><p>暂停时隐藏面板和小组件，配置与内容保留。</p></div><Switch checked={!store.paused} aria-label="显示桌面内容" onCheckedChange={value => void setPaused(!value)}/></div><div className="settings-row"><div><h3>随 Windows 启动</h3><p>登录后自动恢复桌面工作空间。</p></div><Switch checked={store.startWithWindows} aria-label="随 Windows 启动" onCheckedChange={value => void setStartWithWindows(value)}/></div><div className="settings-row"><div><h3>隐藏原生桌面图标</h3><p>开启后由 Nestra 接管显示。暂停或退出时恢复原生图标。</p></div><Switch checked={store.hideNativeIcons} aria-label="隐藏原生桌面图标" onCheckedChange={value => void setHideNativeIcons(value)}/></div></Section><Section title="全局搜索" action={<kbd>Ctrl + Alt + F</kbd>}><p>{provider}</p><p className="muted-text">Everything 运行后可搜索全盘文件；未运行时仍可搜索桌面、收纳区、映射目录和应用。</p><Button variant="outline" onClick={() => void requestOpenSearch()}><Search/>打开全局搜索</Button></Section><Section title="关于 Nestra"><p className="muted-text">桌面工作空间 · 配置格式 v2</p><p className="muted-text">关闭控制中心会隐藏窗口；完全退出请使用系统托盘菜单。</p></Section></>}
+          {section === 'system' && <><PageHeading title="系统" description="管理桌面层、Windows 启动行为与搜索服务。"/><Section title="桌面与启动"><div className="settings-row"><div><h3>显示桌面内容</h3><p>暂停时隐藏面板和小组件，配置与内容保留。</p></div><Switch checked={!store.paused} aria-label="显示桌面内容" onCheckedChange={value => void setPaused(!value)}/></div><div className="settings-row"><div><h3>随 Windows 启动</h3><p>登录后自动恢复桌面工作空间。</p></div><Switch checked={store.startWithWindows} aria-label="随 Windows 启动" onCheckedChange={value => void setStartWithWindows(value)}/></div><div className="settings-row"><div><h3>隐藏原生桌面图标</h3><p>开启后由 Nestra 接管显示。暂停或退出时恢复原生图标。</p></div><Switch checked={store.hideNativeIcons} aria-label="隐藏原生桌面图标" onCheckedChange={value => void setHideNativeIcons(value)}/></div></Section><Section title="全局搜索" action={<kbd>Ctrl + Alt + F</kbd>}><EverythingSetup/><Button className="mt-3" variant="outline" onClick={() => void requestOpenSearch()}><Search/>打开全局搜索</Button></Section><Section title="关于 Nestra"><p className="muted-text">桌面工作空间 · 配置格式 v2</p><p className="muted-text">关闭控制中心会隐藏窗口；完全退出请使用系统托盘菜单。</p></Section></>}
         </motion.div>}
       </main></ResizablePanel>
     </ResizablePanelGroup>
