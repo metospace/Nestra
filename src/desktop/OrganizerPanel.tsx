@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { Check, CheckCheck, Ellipsis, EyeOff, Folder, FolderCog, History, ListChecks, Pencil, RefreshCw, Search, SlidersHorizontal, Trash2, UnfoldVertical, X } from 'lucide-react';
+import { Check, CheckCheck, Ellipsis, EyeOff, FolderCog, History, ListChecks, Pencil, RefreshCw, Search, SlidersHorizontal, Trash2, UnfoldVertical, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -17,7 +17,7 @@ import { fileFilters, matchesFilter } from '@/lib/organizer';
 import { showManager } from '@/lib/tauri';
 import { batchMoveItems, batchReturnItems, bringToFront, confirmDialog, getItemsByPanel, getSelectedEntries, openSurfaceSettings, pinEntry, removeCustomGroup, removeTabGroup, renameCustomGroup, renameTabGroup, rescan, selectPanelItems, setActiveTab, setPanelVisible, showStatus, store, toggleFoldVisibility, updateGroupView, updateLayout, useNestra } from '@/stores/state';
 import type { CustomGroupDefinition, DesktopEntry, Panel } from '@/types';
-import ItemTile from './ItemTile';
+import ItemTile, { EntryIcon } from './ItemTile';
 import { IconButton, ResizeHandles, surfaceStyle } from './SurfaceChrome';
 import OrganizerPages from './OrganizerPages';
 import OrganizerOverflowFolder from './OrganizerOverflowFolder';
@@ -137,7 +137,7 @@ export default function OrganizerPanel({ panel: rootPanel, items: initialItems }
     {state.mappingErrors[panel.groupId] && <p role="status" className="px-3 pb-2 text-xs text-amber-600">{state.mappingErrors[panel.groupId]}</p>}
     {foldedEntries.length > 0 && !showFolded && <div ref={foldedDrop.setNodeRef} className="fold-strip" data-fold-target title="拖到分区或桌面上即可取出">{foldedEntries.slice(0, foldedPreviewCount).map(entry => <ItemTile key={entry.id} entry={entry} compact folded panelKey={panel.key} />)}{foldedEntries.length > foldedPreviewCount && <Button variant="ghost" size="sm" aria-label="展开全部折叠项目" onClick={() => setShowFolded(true)}>+{foldedEntries.length - foldedPreviewCount}</Button>}</div>}
     <div ref={contentRef} className={`organizer-content min-h-0 flex-1 overflow-hidden p-2 ${selected.length > 1 ? 'has-selection' : ''}`} onPointerDown={startBox}>
-      {visibleEntries.length > 0 ? <div className={`items-layout surface-item-grid ${layout.viewMode === 'list' ? 'is-list' : ''}`} style={{ gridTemplateColumns: `repeat(${fit.columns}, minmax(0, 1fr))`, gridAutoRows: `${fit.tileHeight}px` }}>{pageEntries.map(entry => <ItemTile key={entry.id} entry={entry} folded={foldedIds.has(entry.id)} panelKey={panel.key} list={layout.viewMode === 'list'} selectionOrder={visibleEntries.map(item => item.id)} />)}{hasOverflow && <Button variant="ghost" className={`tile overflow-folder h-full ${layout.viewMode === 'list' ? 'is-list' : ''}`} aria-label={`打开更多项目，${overflow.overflow.length} 项`} onClick={() => setOverflowOpen(true)}><Folder className="overflow-folder-icon text-amber-500"/><span className="tile-label">更多项目 ({overflow.overflow.length})</span></Button>}</div> : <div className="empty-hint"><p>{items.length && !filtered.length ? '没有符合条件的项目' : foldedEntries.length ? '项目都已折叠' : activeGroup?.mappedPath ? '文件夹为空' : '空收纳区'}</p><small>{writable ? '拖入文件会移动到此目录' : '选择其他来源，或调整筛选条件'}</small></div>}
+      {visibleEntries.length > 0 ? <div className={`items-layout surface-item-grid ${layout.viewMode === 'list' ? 'is-list' : ''}`} style={{ gridTemplateColumns: `repeat(${fit.columns}, minmax(0, 1fr))`, gridAutoRows: `${fit.tileHeight}px` }}>{pageEntries.map(entry => <ItemTile key={entry.id} entry={entry} folded={foldedIds.has(entry.id)} panelKey={panel.key} list={layout.viewMode === 'list'} selectionOrder={visibleEntries.map(item => item.id)} />)}{hasOverflow && <Button variant="ghost" className={`tile overflow-folder h-full ${layout.viewMode === 'list' ? 'is-list' : ''}`} aria-label={`打开更多项目，${overflow.overflow.length} 项`} onClick={() => setOverflowOpen(true)}><span className="overflow-preview" aria-hidden="true">{overflow.overflow.slice(0, 4).map(entry => <span className="overflow-preview-cell" key={entry.id}><EntryIcon entry={entry}/></span>)}</span><span className="tile-label">更多项目 ({overflow.overflow.length})</span></Button>}</div> : <div className="empty-hint"><p>{items.length && !filtered.length ? '没有符合条件的项目' : foldedEntries.length ? '项目都已折叠' : activeGroup?.mappedPath ? '文件夹为空' : '空收纳区'}</p><small>{writable ? '拖入文件会移动到此目录' : '选择其他来源，或调整筛选条件'}</small></div>}
     </div>
     {!folderMode && <OrganizerPages title={panel.title} page={currentPage} pageCount={pageCount} count={visibleEntries.length} onChange={setPage}/>}
     {selectionBox && <div className="selection-box" style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} />}

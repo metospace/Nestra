@@ -11,6 +11,11 @@ import { Input } from '@/components/ui/input';
 import type { DesktopEntry } from '@/types';
 
 export interface ItemTileProps { entry: DesktopEntry; folded?: boolean; panelKey?: string; compact?: boolean; list?: boolean; hit?: boolean; selectionOrder?: string[]; singleClick?: boolean }
+/** Shared cached image/fallback for normal tiles and overflow thumbnails. */
+export function EntryIcon({ entry }: { entry: DesktopEntry }) {
+  const image = cachedIconUrl(entry.path);
+  return image ? <img src={image} alt="" draggable={false}/> : <span className="glyph-badge">{entry.glyph}</span>;
+}
 /** File activation is a domain decision; modifier clicks always remain selections. */
 export function tileActivation(event: { detail: number; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, singleClickLaunch: boolean, doubleClick = false): 'open' | 'select' | 'none' {
   if (event.ctrlKey || event.metaKey || event.shiftKey) return doubleClick ? 'none' : 'select';
@@ -25,7 +30,6 @@ export default function ItemTile({ entry, folded, panelKey = '', compact, list, 
   const [renaming, setRenaming] = useState(false), [renameValue, setRenameValue] = useState(''), [renameBusy, setRenameBusy] = useState(false);
   const nameInput = useRef<HTMLInputElement>(null), menuPoint = useRef({ screenX: 0, screenY: 0 });
   const managed = canManageEntry(entry), singleClickLaunch = singleClick ?? (Boolean(panelKey) && entry.isApplication);
-  const image = cachedIconUrl(entry.path);
   const drag = useItemDrag(entry, `${panelKey}${folded ? ':folded' : ''}`);
   const group = state.customGroups.find(group => `zone:${group.id}` === panelKey);
   const drop = useItemDrop(`drop:${panelKey}:${entry.id}:${folded ? 'fold' : ''}`, { groupId: group?.id, beforeId: entry.id, fold: folded, mode: group && sourceFor(group).writable ? 'move' : 'blocked', label: group ? `移动到「${group.name}」` : undefined }, !group);
@@ -65,7 +69,7 @@ export default function ItemTile({ entry, folded, panelKey = '', compact, list, 
           onClick={select} onDoubleClick={event => { if (tileActivation(event, singleClickLaunch, true) === 'open') void safeOpen(); }}
           onContextMenuCapture={event => { menuPoint.current = { screenX: event.screenX, screenY: event.screenY }; }}>
           {entry.isFresh && <span className="fresh-dot" />}
-          {image ? <img src={image} alt="" draggable={false} /> : <span className="glyph-badge">{entry.glyph}</span>}
+          <EntryIcon entry={entry}/>
           <span className="tile-label">{entry.name}</span>
           {isLauncher(entry.id) && <Pin className="launcher-pin" size={10} aria-label="已在快捷启动中" />}
         </button>

@@ -6,7 +6,7 @@ use std::{fs::{self, File, OpenOptions}, io::{self, Write}, path::PathBuf,
 use serde::Serialize;
 use serde_json::{json, Value};
 
-pub const BUILD: &str = "20261025-desktop-diagnostics";
+pub const BUILD: &str = "20261026-show-desktop-order";
 const MAX_BYTES: u64 = 1024 * 1024;
 static SENDER: OnceLock<SyncSender<Value>> = OnceLock::new();
 

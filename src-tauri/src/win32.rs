@@ -360,12 +360,24 @@ unsafe fn position_without_activation(hwnd: HWND, after: HWND) -> windows::core:
     result
 }
 
-unsafe fn set_temporary_topmost(hwnd: HWND, order: &[OrderedWindow]) {
+fn promotion_predecessor(order: &[OrderedWindow], layer: isize, host: isize) -> Option<isize> {
+    let host_index = order.iter().position(|window| window.value == host)?;
+    // Shell can report TOPMOST-style windows below its raised desktop. Never
+    // use one of those as an insertion target: it puts us behind the desktop.
+    order[..host_index].iter().rev().find(|window| window.topmost && window.value != layer)
+        .map(|window| window.value)
+}
+
+unsafe fn set_temporary_topmost(hwnd: HWND, host: HWND, order: &[OrderedWindow]) {
     let topmost = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0;
-    let bottom = order.iter().rev().find(|window| window.topmost && window.value != hwnd.0 as isize)
-        .map(|window| HWND(window.value as _));
-    if !topmost && position_without_activation(hwnd, HWND_TOPMOST).is_err() { return; }
-    // Keep all existing topmost windows (taskbar, menus, overlays) above us.
+    let layer_index = order.iter().position(|window| window.value == hwnd.0 as isize);
+    let host_index = order.iter().position(|window| window.value == host.0 as isize);
+    let covered = matches!((layer_index, host_index), (Some(layer), Some(host)) if layer > host);
+    let bottom = promotion_predecessor(order, hwnd.0 as isize, host.0 as isize).map(|value| HWND(value as _));
+    // A style bit can stay set after Shell moves above us. Reassert the actual
+    // placement in that case, even when the window is already marked TOPMOST.
+    if (!topmost || covered) && position_without_activation(hwnd, HWND_TOPMOST).is_err() { return; }
+    // Preserve overlays already above the host (taskbar, menus and overlays).
     // Promotion is explicit: insertion after the last topmost HWND alone can
     // leave a normal window in the normal band.
     if let Some(bottom) = bottom {
@@ -375,11 +387,11 @@ unsafe fn set_temporary_topmost(hwnd: HWND, order: &[OrderedWindow]) {
     }
 }
 
-unsafe fn anchor_in_normal_band(hwnd: HWND, anchor: Option<HWND>) {
+unsafe fn anchor_in_normal_band(hwnd: HWND, anchor: Option<HWND>) -> bool {
     let topmost = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0;
     let mut after = HWND_BOTTOM;
     if let Some(anchor) = anchor.filter(|handle| IsWindow(Some(*handle)).as_bool()) {
-        if !topmost && GetWindow(hwnd, GW_HWNDNEXT).ok() == Some(anchor) { return; }
+        if !topmost && GetWindow(hwnd, GW_HWNDNEXT).ok() == Some(anchor) { return true; }
         let mut above = GetWindow(anchor, GW_HWNDPREV).unwrap_or_default();
         if above == hwnd { above = GetWindow(hwnd, GW_HWNDPREV).unwrap_or_default(); }
         if !above.0.is_null() && IsWindow(Some(above)).as_bool()
@@ -387,11 +399,11 @@ unsafe fn anchor_in_normal_band(hwnd: HWND, anchor: Option<HWND>) {
             after = above;
         }
     }
-    if after == HWND_BOTTOM && !topmost && GetWindow(hwnd, GW_HWNDNEXT).unwrap_or_default().0.is_null() { return; }
+    if after == HWND_BOTTOM && !topmost && GetWindow(hwnd, GW_HWNDNEXT).unwrap_or_default().0.is_null() { return true; }
     // Positioning after a verified non-topmost HWND (or BOTTOM) demotes and
     // anchors in one operation. NOTOPMOST first briefly exposed the layer over
     // every normal app before the second positioning call moved it down.
-    let _ = position_without_activation(hwnd, after);
+    position_without_activation(hwnd, after).is_ok()
 }
 
 unsafe fn reconcile_desktop_order(hwnd: HWND) {
@@ -628,7 +640,7 @@ unsafe fn apply_desktop_order(hwnd: HWND, host: Option<HWND>, marker: Option<HWN
     let mode = desktop_order_mode(order, hwnd.0 as isize, host_value, marker_value);
     let promote = temporary_topmost_allowed(&mode, stay, desktop_foreground, cloaked);
     if promote {
-        set_temporary_topmost(hwnd, order);
+        if let Some(host) = host { set_temporary_topmost(hwnd, host, order); }
     } else {
         // An ordinary app can regain foreground before Explorer lowers its
         // host. Do not follow that raised host over the newly opened app.
@@ -636,7 +648,27 @@ unsafe fn apply_desktop_order(hwnd: HWND, host: Option<HWND>, marker: Option<HWN
             DesktopOrderMode::Normal => host,
             DesktopOrderMode::Raised | DesktopOrderMode::Unknown => marker,
         };
-        anchor_in_normal_band(hwnd, anchor);
+        if !anchor_in_normal_band(hwnd, anchor) {
+            // A privileged/foreign predecessor can deny insertion. Our own
+            // normal-band marker is a safe fallback; a denied external HWND
+            // must not leave the layer TOPMOST or behind the desktop forever.
+            let fallback = marker.filter(|marker| {
+                let mut pid = 0;
+                IsWindow(Some(*marker)).as_bool()
+                    && GetWindowThreadProcessId(*marker, Some(&mut pid)) != 0
+                    && pid == std::process::id()
+                    && GetWindowLongPtrW(*marker, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 == 0
+            }).unwrap_or(HWND_BOTTOM);
+            let topmost = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0;
+            let placed = !topmost && if fallback == HWND_BOTTOM {
+                GetWindow(hwnd, GW_HWNDNEXT).unwrap_or_default().0.is_null()
+            } else { GetWindow(hwnd, GW_HWNDPREV).ok() == Some(fallback) };
+            if !placed && position_without_activation(hwnd, fallback).is_err() && fallback != HWND_BOTTOM {
+                let _ = position_without_activation(hwnd, HWND_BOTTOM);
+            }
+            crate::desktop_diagnostics::record("position-fallback", serde_json::json!({
+                "hwnd": hwnd.0 as isize, "after": fallback.0 as isize }));
+        }
     }
 }
 
@@ -1465,6 +1497,45 @@ mod tests {
             assert!(!IsWindow(Some(replacement)).as_bool());
             assert!(!UnhookWinEvent(hook).as_bool());
             assert!(!UnhookWinEvent(reorder).as_bool());
+        }
+    }
+
+    #[test]
+    fn promotion_ignores_topmost_flags_reported_below_the_desktop_host() {
+        // Replay the mixed-order pattern from the failing Win+D diagnostic.
+        let snapshot = vec![OrderedWindow { value: 11, topmost: true },
+            OrderedWindow { value: 22, topmost: false }, // raised desktop
+            OrderedWindow { value: 33, topmost: true },  // inaccessible foreign window
+            OrderedWindow { value: 44, topmost: true },  // our covered layer
+            OrderedWindow { value: 55, topmost: false }];
+        assert_eq!(promotion_predecessor(&snapshot, 44, 22), Some(11));
+        assert_eq!(promotion_predecessor(&snapshot[1..], 44, 22), None);
+        assert_eq!(promotion_predecessor(&snapshot, 44, 999), None);
+    }
+
+    #[test]
+    fn already_topmost_layer_below_a_raised_host_is_moved_above_it_without_activation() {
+        unsafe {
+            let layer = private_window();
+            let host = private_window();
+            let marker = PrivateWindow(create_desktop_marker().unwrap());
+            let overlay = private_window();
+            position_without_activation(layer.0, HWND_TOPMOST).unwrap();
+            position_without_activation(host.0, HWND_TOPMOST).unwrap();
+            position_without_activation(overlay.0, HWND_TOPMOST).unwrap();
+            let snapshot = vec![OrderedWindow { value: overlay.0.0 as isize, topmost: true },
+                OrderedWindow { value: host.0.0 as isize, topmost: true },
+                OrderedWindow { value: layer.0.0 as isize, topmost: true },
+                OrderedWindow { value: marker.0.0 as isize, topmost: false }];
+            let foreground = GetForegroundWindow();
+            let focus = GetFocus();
+            apply_desktop_order(layer.0, Some(host.0), Some(marker.0), &snapshot, true, true, false);
+            assert_eq!(GetWindow(layer.0, GW_HWNDNEXT).unwrap_or_default(), host.0,
+                "a TOPMOST style bit alone does not prove the layer is above the raised desktop");
+            assert_eq!(GetWindow(layer.0, GW_HWNDPREV).unwrap_or_default(), overlay.0);
+            assert!(!IsWindowVisible(layer.0).as_bool());
+            assert_eq!(GetForegroundWindow(), foreground);
+            assert_eq!(GetFocus(), focus);
         }
     }
 

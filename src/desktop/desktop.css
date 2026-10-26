@@ -18,7 +18,9 @@
 .organizer-auto-layout .organizer-content::-webkit-scrollbar{display:none}
 .organizer-auto-layout .surface-item-grid>.tile{height:100%;min-height:0}
 .organizer-auto-layout .tile img,.organizer-auto-layout .tile .glyph-badge{max-width:none}
-.tile.overflow-folder .overflow-folder-icon{width:var(--item-icon-size,42px);height:var(--item-icon-size,42px);flex-shrink:0}
+.overflow-preview{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:3px;padding:3px;width:var(--item-icon-size,42px);height:var(--item-icon-size,42px);flex-shrink:0;border-radius:8px;background:var(--nestra-hover,var(--muted));box-sizing:border-box}
+.overflow-preview-cell{min-width:0;min-height:0;overflow:hidden;display:grid;place-items:center}
+.tile .overflow-preview img,.tile .overflow-preview .glyph-badge{width:100%;height:100%;font-size:11px;border-radius:3px;background:transparent;object-fit:contain}
 .tile.overflow-folder{white-space:normal}
 .organizer-pages{display:flex;align-items:center;justify-content:center;gap:12px;height:34px;flex-shrink:0;border-top:1px solid var(--nestra-line,var(--border));font-size:11px;color:var(--nestra-text-secondary,var(--muted-foreground))}
 .organizer-auto-layout .fold-strip{flex-shrink:0;align-items:center}
