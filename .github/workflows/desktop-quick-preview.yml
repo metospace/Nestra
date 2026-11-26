@@ -39,7 +39,7 @@ jobs:
           $setups = @(Get-ChildItem src-tauri/target/release/bundle/nsis -Filter '*-setup.exe' -File)
           if ($setups.Count -ne 1) { throw "Expected exactly one NSIS installer, got $($setups.Count)" }
           $out = New-Item -ItemType Directory -Force preview-artifact
-          $name = 'Nestra-DesktopQuick-Preview_0.1.0-r2_x64-setup.exe'
+          $name = 'Nestra-DesktopQuick-Preview_0.1.0-r3_x64-setup.exe'
           $candidate = Join-Path $out.FullName $name
           Copy-Item $setups[0].FullName $candidate
           $hash = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -59,6 +59,10 @@ jobs:
           $preview = Join-Path $env:LOCALAPPDATA 'app.nestra.desktopquickpreview/state.json'
           if ((Test-Path -LiteralPath $regular) -or (Test-Path -LiteralPath $preview)) { throw 'Expected a clean CI profile' }
           New-Item -ItemType Directory -Force (Split-Path -Parent $regular) | Out-Null
+          New-Item -ItemType Directory -Force (Split-Path -Parent $preview) | Out-Null
+          $previousPreview = '{"schemaVersion":2,"panelLayouts":{"launcher":{"x":40,"y":60,"width":360,"height":250,"zIndex":3,"visible":false,"launcherVisibilityMigrated":true}},"customGroups":[],"widgets":[],"launcherIds":[],"foldedItems":{},"itemOrders":{}}'
+          Set-Content -LiteralPath $preview -Value $previousPreview -Encoding utf8NoBOM
+          $previewHash = (Get-FileHash -LiteralPath $preview -Algorithm SHA256).Hash
           $fixture = '{"schemaVersion":2,"panelLayouts":{"launcher":{"x":164,"y":138,"width":360,"height":250,"zIndex":3,"visible":false,"launcherVisibilityMigrated":true}},"customGroups":[],"widgets":[],"launcherIds":[],"foldedItems":{},"itemOrders":{},"appearance":{"theme":"dark","surfaceMaterial":"glass","cornerStyle":"rounded","borderStyle":"subtle","panelOpacity":0.86},"coexistMigrated":true}'
           Set-Content -LiteralPath $regular -Value $fixture -Encoding utf8NoBOM
           $regularHash = (Get-FileHash -LiteralPath $regular -Algorithm SHA256).Hash
@@ -83,7 +87,10 @@ jobs:
             $layout = (Get-Content -LiteralPath $preview -Raw | ConvertFrom-Json).panelLayouts.launcher
             if ($layout.x -ne 164 -or $layout.y -ne 138) { throw 'Saved layout coordinates were not inherited' }
             if ((Get-FileHash -LiteralPath $regular -Algorithm SHA256).Hash -ne $regularHash) { throw 'Regular state was modified' }
-            Write-Host 'Preview inherited the existing coordinates without changing regular state.'
+            $backups = Join-Path (Split-Path -Parent $preview) 'backups'
+            $archive = @(Get-ChildItem -LiteralPath $backups -Filter 'preview-before-layout-import-*.json' -File | Where-Object { (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash -eq $previewHash })
+            if ($archive.Count -ne 1) { throw 'Previous preview configuration backup was not verified' }
+            Write-Host 'Preview inherited existing coordinates, backed up the previous preview state, and left regular state unchanged.'
 
             "NESTRA_PREVIEW_PID=$($app.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           } catch {
@@ -102,11 +109,14 @@ jobs:
         shell: pwsh
         run: |
           "installed_launch=passed`nregular_layout_import=passed" | Set-Content -Encoding ascii preview-artifact/windows-verification.txt
+          $diagnostics = Join-Path $env:LOCALAPPDATA 'app.nestra.desktopquickpreview/diagnostics/desktop-current.jsonl'
+          if (Test-Path -LiteralPath $diagnostics) { Select-String -LiteralPath $diagnostics -Pattern '"event":"quick-' | ForEach-Object { $_.Line } }
           "global_hotkey=${{ steps.hotkey.outcome }}" | Add-Content -Encoding ascii preview-artifact/windows-verification.txt
           Stop-Process -Id ([uint32]$env:NESTRA_PREVIEW_PID) -Force -ErrorAction SilentlyContinue
       - uses: actions/upload-artifact@v4
         with:
-          name: Nestra-DesktopQuick-Preview-r2-Windows-x64
+          name: Nestra-DesktopQuick-Preview-r3-Windows-x64
           path: preview-artifact/*
           if-no-files-found: error
           retention-days: 14
+

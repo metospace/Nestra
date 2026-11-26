@@ -76,6 +76,8 @@ pub fn run() {
                     } else if shortcut == &Shortcut::from_str(HOTKEY_SEARCH).expect("valid hotkey") {
                         "search"
                     } else if shortcut == &Shortcut::from_str(HOTKEY_DESKTOP_QUICK).expect("valid hotkey") {
+                        #[cfg(all(windows, feature = "desktop-quick-preview"))]
+                        desktop_diagnostics::record("quick-hotkey-received", ());
                         "desktop-quick"
                     } else if shortcut == &Shortcut::from_str(HOTKEY_PAUSE).expect("valid hotkey") {
                         "pause"
@@ -140,8 +142,17 @@ pub fn run() {
             WindowEvent::Focused(false) if matches!(window.label(), "search" | "desktop-quick") => {
                 let window = window.clone();
                 tauri::async_runtime::spawn_blocking(move || {
-                    if let Ok(false) = window.is_focused() { let _ = window.hide(); }
+                    let unfocused = matches!(window.is_focused(), Ok(false));
+                    #[cfg(all(windows, feature = "desktop-quick-preview"))]
+                    if window.label() == "desktop-quick" {
+                        desktop_diagnostics::record("quick-focus-lost", serde_json::json!({ "will_hide": unfocused }));
+                    }
+                    if unfocused { let _ = window.hide(); }
                 });
+            }
+            #[cfg(all(windows, feature = "desktop-quick-preview"))]
+            WindowEvent::Focused(true) if window.label() == "desktop-quick" => {
+                desktop_diagnostics::record("quick-focus-gained", ());
             }
             WindowEvent::Focused(true) if window.label() == "desktop" => {
                 #[cfg(windows)]
@@ -326,7 +337,12 @@ fn register_hotkeys(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Er
     let _ = app.global_shortcut().unregister_all();
     for spec in [HOTKEY_MANAGER, HOTKEY_SEARCH, HOTKEY_DESKTOP_QUICK, HOTKEY_PAUSE] {
         let shortcut = Shortcut::from_str(spec).expect("valid hotkey");
-        if let Err(error) = app.global_shortcut().register(shortcut) {
+        let result = app.global_shortcut().register(shortcut);
+        #[cfg(all(windows, feature = "desktop-quick-preview"))]
+        if spec == HOTKEY_DESKTOP_QUICK {
+            desktop_diagnostics::record("quick-hotkey-register", serde_json::json!({ "success": result.is_ok() }));
+        }
+        if let Err(error) = result {
             eprintln!("跳过热键 {spec}：{error}");
         }
     }

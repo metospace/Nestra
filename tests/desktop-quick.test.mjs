@@ -7,7 +7,7 @@ import ts from 'typescript';
 const file = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const script = path => ts.transpile(file(path).replace(/^import .*$/gm, '').replace(/^export /gm, ''), { target: ts.ScriptTarget.ES2022 });
 const context = vm.createContext({});
-vm.runInContext(script('src/lib/search.ts') + script('src/lib/desktopQuick.ts'), context);
+vm.runInContext(script('src/lib/search.ts') + script('src/lib/organizer.ts') + script('src/lib/desktopQuick.ts'), context);
 const item = (name, path, scope, source, isHidden = false) => ({ entry: { name, path, isHidden }, scope, source });
 const rows = [
   item('项目', 'C:/Desktop/项目.lnk', 'desktop', '个人桌面'),
@@ -54,4 +54,38 @@ test('card palette inherits theme/material/corners, has a dark default, and navi
   assert.equal(context.desktopQuickStep(1, 10, 4, 'ArrowDown'), 5);
   assert.equal(context.desktopQuickStep(5, 10, 4, 'ArrowRight'), 6);
   assert.equal(context.desktopQuickStep(9, 10, 4, 'ArrowDown'), 9);
+});
+
+test('real group identity, display name, empty groups and discovered storage stay independent', () => {
+  const groups = [
+    {id:'biz',name:'新版名称',dirName:'old-dir'},
+    {id:'empty',name:'待整理',dirName:'empty-dir'},
+    {id:'share',name:'共享资料',dirName:'',mappedPath:'D:/team'},
+    {id:'docs',name:'桌面文档',dirName:'',sourceKind:'category',filter:'documents'},
+  ];
+  const desktop = [
+    {id:'z1',name:'旧文件',path:'C:/Desktop/.nestra/OLD-DIR/a.txt',zone:'OLD-DIR',kind:'file'},
+    {id:'z2',name:'恢复文件',path:'C:/Desktop/.nestra/recovered/a.txt',zone:'recovered',kind:'file'},
+    {id:'t1',name:'桌面文件',path:'C:/Desktop/a.txt',kind:'file'},
+    {id:'t2',name:'桌面文件夹',path:'C:/Desktop/abc',kind:'folder'},
+  ];
+  const locations = context.quickLocations(groups,desktop,[{dirName:'without-metadata',path:'C:/Desktop/.nestra/without-metadata'}]);
+  const names = id => Array.from(context.quickLocationEntries(locations.find(p=>p.id===id),desktop),e=>e.name);
+  assert.equal(locations.find(p=>p.id==='group:biz').title,'新版名称');
+  assert.deepEqual(names('group:biz'),['旧文件']);
+  assert.deepEqual(names('group:empty'),[]);
+  assert.deepEqual(names('desktop'),['桌面文件','桌面文件夹']);
+  assert.deepEqual(names('group:docs'),['桌面文件']);
+  assert.equal(locations.find(p=>p.id==='group:share').path,'D:/team');
+  assert.ok(locations.some(p=>p.id==='unconfigured:without-metadata'));
+  assert.ok(locations.some(p=>p.id==='unconfigured:recovered'));
+});
+test('types and saved sort distinguish entering folders from launching entries', () => {
+  const folder = {id:'folder',name:'Folder',kind:'folder'};
+  const doc = {id:'doc',name:'A.txt',kind:'file'};
+  const app = {id:'app',name:'A.lnk',kind:'shortcut'};
+  assert.deepEqual([folder,doc,app,{kind:'shell'}].map(context.quickItemKind),['folder','file','app','system']);
+  assert.equal(context.orderQuickLocation([doc,folder,app],[])[0].id,'folder');
+  assert.equal(context.orderQuickLocation([doc,folder,app],['doc'])[0].id,'doc');
+  assert.equal(context.quickPathKey('D:\\docs\\'),'d:/docs');
 });

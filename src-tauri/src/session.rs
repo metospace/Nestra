@@ -102,9 +102,14 @@ pub fn open_search(app: &AppHandle) {
 /// A normal, focusable popup. Never activate or re-layer the desktop shell.
 pub fn open_desktop_quick(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("desktop-quick") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
+        let _shown = window.show();
+        let _restored = window.unminimize();
+        let _focus = window.set_focus();
+        #[cfg(all(windows, feature = "desktop-quick-preview"))]
+        crate::desktop_diagnostics::record("quick-window-open", serde_json::json!({
+            "show_ok": _shown.is_ok(), "restore_ok": _restored.is_ok(), "focus_ok": _focus.is_ok(),
+            "visible": window.is_visible().ok(), "focused": window.is_focused().ok(),
+        }));
         let _ = app.emit_to("desktop-quick", "nestra://desktop-quick-open", ());
     }
 }
