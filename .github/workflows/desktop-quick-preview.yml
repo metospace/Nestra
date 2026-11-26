@@ -1,0 +1,89 @@
+name: Nestra Desktop Quick Preview
+
+on:
+  push:
+    branches: [preview/desktop-quick-windows]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nestra-desktop-quick-preview
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: desktop-quick-preview
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm build
+      - run: cargo test --locked --lib --features desktop-quick-preview -- --test-threads=1
+        working-directory: src-tauri
+      - run: pnpm exec tauri build --bundles nsis --features desktop-quick-preview --config src-tauri/tauri.desktop-quick-preview.conf.json --ci -- --locked
+      - name: Stage and check installer
+        shell: pwsh
+        run: |
+          $setups = @(Get-ChildItem src-tauri/target/release/bundle/nsis -Filter '*-setup.exe' -File)
+          if ($setups.Count -ne 1) { throw "Expected exactly one NSIS installer, got $($setups.Count)" }
+          $out = New-Item -ItemType Directory -Force preview-artifact
+          $name = 'Nestra-DesktopQuick-Preview_0.1.0_x64-setup.exe'
+          $candidate = Join-Path $out.FullName $name
+          Copy-Item $setups[0].FullName $candidate
+          $hash = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash *$name" | Set-Content -Encoding ascii "$candidate.sha256"
+          Write-Host "Installer contains $((Get-Item -LiteralPath $candidate).Length) bytes; SHA256 $hash"
+          $dir = Join-Path $env:RUNNER_TEMP 'nestra-desktop-quick-install'
+          $install = Start-Process -FilePath $candidate -ArgumentList "/S /D=$dir" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "NSIS returned $($install.ExitCode)" }
+          $binaries = @(Get-ChildItem -LiteralPath $dir -Filter '*.exe' -File | Where-Object { $_.Name -notmatch 'unins|uninstall' })
+          if ($binaries.Count -ne 1) { throw "Unexpected installed executables: $($binaries.Name -join ', ')" }
+          "NESTRA_PREVIEW_EXE=$($binaries[0].FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Launch the installed application
+        id: launch
+        shell: pwsh
+        run: |
+          $app = Start-Process -FilePath $env:NESTRA_PREVIEW_EXE -PassThru
+          $deadline = [DateTime]::UtcNow.AddSeconds(35)
+          try {
+            do {
+              Start-Sleep -Milliseconds 500
+              $app.Refresh()
+              if ($app.HasExited) { throw "Nestra startup exited with $($app.ExitCode)" }
+            } while ($app.MainWindowHandle -eq [IntPtr]::Zero -and [DateTime]::UtcNow -lt $deadline)
+            if ($app.MainWindowHandle -eq [IntPtr]::Zero) { throw 'Installed window was not detected' }
+            "NESTRA_PREVIEW_PID=$($app.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          } catch {
+            Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
+            throw
+          }
+      - name: Exercise the registered global hotkey
+        id: hotkey
+        continue-on-error: true
+        shell: pwsh
+        run: ./tests/desktop-quick-preview-smoke.ps1 -AppProcessId ([uint32]$env:NESTRA_PREVIEW_PID)
+      - name: Write native verification summary
+        if: always() && steps.launch.outcome == 'success'
+        shell: pwsh
+        run: |
+          "installed_launch=passed" | Set-Content -Encoding ascii preview-artifact/windows-verification.txt
+          "global_hotkey=${{ steps.hotkey.outcome }}" | Add-Content -Encoding ascii preview-artifact/windows-verification.txt
+          Stop-Process -Id ([uint32]$env:NESTRA_PREVIEW_PID) -Force -ErrorAction SilentlyContinue
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Nestra-DesktopQuick-Preview-Windows-x64
+          path: preview-artifact/*
+          if-no-files-found: error
+          retention-days: 14

@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { ItemDragProvider } from '@/composables/useItemDrag';
 const ManagerApp = lazy(() => import('@/manager/ManagerApp'));
 const DesktopLayer = lazy(() => import('@/desktop/DesktopLayer'));
+const DesktopQuickWindow = lazy(() => import('@/features/DesktopQuickWindow'));
 const SearchWindow = lazy(() => import('@/features/SearchWindow'));
 class WindowErrorBoundary extends Component<{children: ReactNode}, {error: string}> {
   state = {error: ''};
@@ -21,7 +22,7 @@ class WindowErrorBoundary extends Component<{children: ReactNode}, {error: strin
 export default function App() {
   const label = getCurrentWebviewWindow().label;
   return <WindowErrorBoundary><MotionConfig reducedMotion="user" transition={{duration: .16}}><TooltipProvider><ItemDragProvider><Suspense fallback={label === 'desktop' ? null : <div className="grid h-screen place-items-center text-sm text-muted-foreground" role="status">正在加载工作空间…</div>}>
-    {label === 'manager' ? <ManagerApp /> : label === 'search' ? <SearchWindow /> : <DesktopLayer />}
+    {label === 'manager' ? <ManagerApp /> : label === 'search' ? <SearchWindow /> : label === 'desktop-quick' ? <DesktopQuickWindow /> : <DesktopLayer />}
     <FileMoveResults /><ConfirmDialog />
   </Suspense></ItemDragProvider></TooltipProvider></MotionConfig></WindowErrorBoundary>;
 }

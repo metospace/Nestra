@@ -11,7 +11,10 @@ use windows::Win32::System::Registry::{
     HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_SZ, REG_VALUE_TYPE,
 };
 
+#[cfg(not(feature = "desktop-quick-preview"))]
 const VALUE_NAME: PCWSTR = w!("Nestra");
+#[cfg(feature = "desktop-quick-preview")]
+const VALUE_NAME: PCWSTR = w!("NestraDesktopQuickPreview");
 
 fn run_key_path() -> PCWSTR {
     w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run")

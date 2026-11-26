@@ -112,3 +112,14 @@
 @media (max-width:640px) { .source-badge { display:none; }.navigation-footer span:first-child { display:none; } }
 @media (prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; transition-duration:0s!important; animation-duration:0s!important; } }
 @media (prefers-reduced-transparency:reduce) { .nestra-panel { background:var(--card)!important; backdrop-filter:none!important; } }
+
+/* Read-only shortcut palette, independent of the Explorer desktop layer. */
+.desktop-quick-window { border:1px solid var(--border); overflow:hidden; }
+.desktop-quick-heading { display:flex; align-items:center; gap:12px; padding:10px 14px; border-bottom:1px solid var(--border); }
+.desktop-quick-heading h1 { margin:0; flex:1; font-size:14px; font-weight:650; }
+.desktop-quick-heading kbd { color:var(--muted-foreground); font-size:11px; }
+.desktop-quick-window .navigation-scopes { padding-block:4px; }
+.desktop-quick-result { width:100%; text-align:left; cursor:pointer; }
+.desktop-quick-result:hover { background:var(--accent); }
+.desktop-quick-result:focus-visible { outline:2px solid var(--ring); outline-offset:-2px; }
+.desktop-quick-empty { padding:28px 12px; text-align:center; color:var(--muted-foreground); font-size:13px; }

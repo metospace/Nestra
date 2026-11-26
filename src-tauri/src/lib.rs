@@ -51,6 +51,7 @@ use tauri_plugin_global_shortcut::{
 };
 
 const HOTKEY_MANAGER: &str = "ctrl+alt+g";
+const HOTKEY_DESKTOP_QUICK: &str = "ctrl+alt+space";
 const HOTKEY_SEARCH: &str = "ctrl+alt+f";
 const HOTKEY_PAUSE: &str = "ctrl+alt+p";
 const TRAY_EVENT_NAME: &str = "nestra://tray";
@@ -74,13 +75,18 @@ pub fn run() {
                         "manager"
                     } else if shortcut == &Shortcut::from_str(HOTKEY_SEARCH).expect("valid hotkey") {
                         "search"
-                    } else { "pause" };
+                    } else if shortcut == &Shortcut::from_str(HOTKEY_DESKTOP_QUICK).expect("valid hotkey") {
+                        "desktop-quick"
+                    } else if shortcut == &Shortcut::from_str(HOTKEY_PAUSE).expect("valid hotkey") {
+                        "pause"
+                    } else { return; };
                     let app = app.clone();
                     tauri::async_runtime::spawn_blocking(move || {
                         if shutdown::in_progress() { return; }
                         match action {
                             "manager" => toggle_manager(&app),
                             "search" => session::open_search(&app),
+                            "desktop-quick" => session::open_desktop_quick(&app),
                             _ => { session::toggle_paused(&app); refresh_pause_label(&app); }
                         }
                     });
@@ -122,9 +128,11 @@ pub fn run() {
                 let window = window.clone();
                 tauri::async_runtime::spawn_blocking(move || { let _ = window.hide(); });
             }
-            WindowEvent::Focused(false) if window.label() == "search" => {
+            WindowEvent::Focused(false) if matches!(window.label(), "search" | "desktop-quick") => {
                 let window = window.clone();
-                tauri::async_runtime::spawn_blocking(move || { let _ = window.hide(); });
+                tauri::async_runtime::spawn_blocking(move || {
+                    if let Ok(false) = window.is_focused() { let _ = window.hide(); }
+                });
             }
             WindowEvent::Focused(true) if window.label() == "desktop" => {
                 #[cfg(windows)]
@@ -307,7 +315,7 @@ fn recreate_desktop_layer(app: &tauri::AppHandle) -> tauri::Result<()> {
 fn register_hotkeys(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     // 热键被占用时不能把整个应用带崩（本机 Ctrl+Alt+P 经常已被其他软件注册）。
     let _ = app.global_shortcut().unregister_all();
-    for spec in [HOTKEY_MANAGER, HOTKEY_SEARCH, HOTKEY_PAUSE] {
+    for spec in [HOTKEY_MANAGER, HOTKEY_SEARCH, HOTKEY_DESKTOP_QUICK, HOTKEY_PAUSE] {
         let shortcut = Shortcut::from_str(spec).expect("valid hotkey");
         if let Err(error) = app.global_shortcut().register(shortcut) {
             eprintln!("跳过热键 {spec}：{error}");
@@ -319,6 +327,7 @@ fn register_hotkeys(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Er
 fn build_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let show = MenuItem::with_id(app, "manager", "显示管理器", true, None::<&str>)?;
     let search = MenuItem::with_id(app, "search", "搜索文件与应用\tCtrl+Alt+F", true, None::<&str>)?;
+    let desktop_quick = MenuItem::with_id(app, "desktop-quick", "桌面快开\tCtrl+Alt+Space", true, None::<&str>)?;
     let pause = MenuItem::with_id(app, "pause", "暂停整理，显示系统桌面\tCtrl+Alt+P", true, None::<&str>)?;
     let separator_1 = PredefinedMenuItem::separator(app)?;
     let note = MenuItem::with_id(app, "new-note", "新建便签", true, None::<&str>)?;
@@ -337,6 +346,7 @@ fn build_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
         &[
             &show,
             &search,
+            &desktop_quick,
             &pause,
             &separator_1,
             &note,
@@ -382,6 +392,7 @@ fn handle_tray_action(app: &tauri::AppHandle, event: MenuEvent) {
     match event.id().as_ref() {
         "manager" => show_manager(app),
         "search" => session::open_search(app),
+        "desktop-quick" => session::open_desktop_quick(app),
         "pause" => {
             session::toggle_paused(app);
             refresh_pause_label(app);

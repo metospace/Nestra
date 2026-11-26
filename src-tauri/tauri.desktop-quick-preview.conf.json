@@ -1,0 +1,11 @@
+{
+  "productName": "Nestra Desktop Quick Preview",
+  "identifier": "app.nestra.desktopquickpreview",
+  "bundle": {
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}

@@ -57,6 +57,20 @@
         "decorations": false,
         "skipTaskbar": true,
         "dragDropEnabled": false
+      },
+      {
+        "label": "desktop-quick",
+        "title": "Nestra 桌面快开",
+        "url": "index.html#desktop-quick",
+        "width": 620,
+        "height": 480,
+        "center": true,
+        "visible": false,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "decorations": false,
+        "skipTaskbar": true,
+        "dragDropEnabled": false
       }
     ],
     "security": {

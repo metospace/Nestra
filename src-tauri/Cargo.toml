@@ -16,6 +16,8 @@ tauri-build = { version = "2", features = [] }
 # Expose the real desktop surface to app-window UI automation. Shipping builds
 # leave this off; hit regions, NOACTIVATE and desktop anchoring stay identical.
 ui-test = []
+# Separate current-user startup and process identity for the trial installer.
+desktop-quick-preview = []
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png", "protocol-asset"] }

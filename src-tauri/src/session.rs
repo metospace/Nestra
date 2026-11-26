@@ -99,6 +99,16 @@ pub fn open_search(app: &AppHandle) {
     }
 }
 
+/// A normal, focusable popup. Never activate or re-layer the desktop shell.
+pub fn open_desktop_quick(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("desktop-quick") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        let _ = app.emit_to("desktop-quick", "nestra://desktop-quick-open", ());
+    }
+}
+
 pub fn show_desktop_layer(app: &AppHandle) {
     if is_paused() {
         set_paused(app, false);

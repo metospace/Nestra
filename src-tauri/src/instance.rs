@@ -8,14 +8,19 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetPropW, SetPropW, SetForegroundWindow, ShowWindow, SW_RESTORE,
 };
 
-#[cfg(not(feature = "ui-test"))]
+#[cfg(not(any(feature = "ui-test", feature = "desktop-quick-preview")))]
 const MANAGER_MARKER: windows::core::PCWSTR = w!("Nestra.ManagerWindow");
 #[cfg(feature = "ui-test")]
 const MANAGER_MARKER: windows::core::PCWSTR = w!("Nestra.UiTest.ManagerWindow");
-#[cfg(not(feature = "ui-test"))]
+#[cfg(not(any(feature = "ui-test", feature = "desktop-quick-preview")))]
 const INSTANCE_NAME: windows::core::PCWSTR = w!("Local\\Nestra.DesktopOrganizer.Instance");
 #[cfg(feature = "ui-test")]
 const INSTANCE_NAME: windows::core::PCWSTR = w!("Local\\Nestra.DesktopOrganizer.UiTest.Instance");
+
+#[cfg(all(not(feature = "ui-test"), feature = "desktop-quick-preview"))]
+const MANAGER_MARKER: windows::core::PCWSTR = w!("Nestra.DesktopQuickPreview.ManagerWindow");
+#[cfg(all(not(feature = "ui-test"), feature = "desktop-quick-preview"))]
+const INSTANCE_NAME: windows::core::PCWSTR = w!("Local\\Nestra.DesktopOrganizer.DesktopQuickPreview.Instance");
 
 pub struct InstanceGuard(HANDLE);
 impl Drop for InstanceGuard {
