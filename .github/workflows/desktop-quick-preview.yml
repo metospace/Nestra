@@ -62,18 +62,24 @@ jobs:
           $fixture = '{"schemaVersion":2,"panelLayouts":{"launcher":{"x":164,"y":138,"width":360,"height":250,"zIndex":3,"visible":false,"launcherVisibilityMigrated":true}},"customGroups":[],"widgets":[],"launcherIds":[],"foldedItems":{},"itemOrders":{},"appearance":{"theme":"dark","surfaceMaterial":"glass","cornerStyle":"rounded","borderStyle":"subtle","panelOpacity":0.86},"coexistMigrated":true}'
           Set-Content -LiteralPath $regular -Value $fixture -Encoding utf8NoBOM
           $regularHash = (Get-FileHash -LiteralPath $regular -Algorithm SHA256).Hash
-          $app = Start-Process -FilePath $env:NESTRA_PREVIEW_EXE -PassThru
+          $migration = Join-Path (Split-Path -Parent $preview) 'regular-layout-import-v1.json'
+          $stderr = Join-Path $env:RUNNER_TEMP 'nestra-preview-stderr.txt'
+          $app = Start-Process -FilePath $env:NESTRA_PREVIEW_EXE -RedirectStandardError $stderr -PassThru
           $deadline = [DateTime]::UtcNow.AddSeconds(35)
           try {
+            # The desktop window becomes visible before Tauri setup completes.
+            # Poll for the durable migration marker as well as the window.
+            $migrationComplete = $false
             do {
               Start-Sleep -Milliseconds 500
               $app.Refresh()
               if ($app.HasExited) { throw "Nestra startup exited with $($app.ExitCode)" }
-            } while ($app.MainWindowHandle -eq [IntPtr]::Zero -and [DateTime]::UtcNow -lt $deadline)
+              if (Test-Path -LiteralPath $migration) {
+                $migrationComplete = [bool](Get-Content -LiteralPath $migration -Raw | ConvertFrom-Json).done
+              }
+            } while (($app.MainWindowHandle -eq [IntPtr]::Zero -or -not $migrationComplete) -and [DateTime]::UtcNow -lt $deadline)
             if ($app.MainWindowHandle -eq [IntPtr]::Zero) { throw 'Installed window was not detected' }
-            $migration = Join-Path (Split-Path -Parent $preview) 'regular-layout-import-v1.json'
-            if (-not (Test-Path -LiteralPath $migration)) { throw 'Preview did not import regular layout' }
-            if (-not (Get-Content -LiteralPath $migration -Raw | ConvertFrom-Json).done) { throw 'Preview migration did not complete' }
+            if (-not $migrationComplete) { throw 'Preview did not finish importing the regular layout' }
             $layout = (Get-Content -LiteralPath $preview -Raw | ConvertFrom-Json).panelLayouts.launcher
             if ($layout.x -ne 164 -or $layout.y -ne 138) { throw 'Saved layout coordinates were not inherited' }
             if ((Get-FileHash -LiteralPath $regular -Algorithm SHA256).Hash -ne $regularHash) { throw 'Regular state was modified' }
@@ -81,6 +87,8 @@ jobs:
 
             "NESTRA_PREVIEW_PID=$($app.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           } catch {
+            if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr -Tail 20 }
+            Get-ChildItem -LiteralPath $env:LOCALAPPDATA -Directory -Filter 'app.nestra*' | Select-Object -ExpandProperty Name
             Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
             throw
           }
