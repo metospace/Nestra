@@ -39,7 +39,7 @@ jobs:
           $setups = @(Get-ChildItem src-tauri/target/release/bundle/nsis -Filter '*-setup.exe' -File)
           if ($setups.Count -ne 1) { throw "Expected exactly one NSIS installer, got $($setups.Count)" }
           $out = New-Item -ItemType Directory -Force preview-artifact
-          $name = 'Nestra-DesktopQuick-Preview_0.1.0_x64-setup.exe'
+          $name = 'Nestra-DesktopQuick-Preview_0.1.0-r2_x64-setup.exe'
           $candidate = Join-Path $out.FullName $name
           Copy-Item $setups[0].FullName $candidate
           $hash = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -55,6 +55,13 @@ jobs:
         id: launch
         shell: pwsh
         run: |
+          $regular = Join-Path $env:LOCALAPPDATA 'app.nestra.desktop/state.json'
+          $preview = Join-Path $env:LOCALAPPDATA 'app.nestra.desktopquickpreview/state.json'
+          if ((Test-Path -LiteralPath $regular) -or (Test-Path -LiteralPath $preview)) { throw 'Expected a clean CI profile' }
+          New-Item -ItemType Directory -Force (Split-Path -Parent $regular) | Out-Null
+          $fixture = '{"schemaVersion":2,"panelLayouts":{"launcher":{"x":164,"y":138,"width":360,"height":250,"zIndex":3,"visible":false,"launcherVisibilityMigrated":true}},"customGroups":[],"widgets":[],"launcherIds":[],"foldedItems":{},"itemOrders":{},"appearance":{"theme":"dark","surfaceMaterial":"glass","cornerStyle":"rounded","borderStyle":"subtle","panelOpacity":0.86},"coexistMigrated":true}'
+          Set-Content -LiteralPath $regular -Value $fixture -Encoding utf8NoBOM
+          $regularHash = (Get-FileHash -LiteralPath $regular -Algorithm SHA256).Hash
           $app = Start-Process -FilePath $env:NESTRA_PREVIEW_EXE -PassThru
           $deadline = [DateTime]::UtcNow.AddSeconds(35)
           try {
@@ -64,6 +71,14 @@ jobs:
               if ($app.HasExited) { throw "Nestra startup exited with $($app.ExitCode)" }
             } while ($app.MainWindowHandle -eq [IntPtr]::Zero -and [DateTime]::UtcNow -lt $deadline)
             if ($app.MainWindowHandle -eq [IntPtr]::Zero) { throw 'Installed window was not detected' }
+            $migration = Join-Path (Split-Path -Parent $preview) 'regular-layout-import-v1.json'
+            if (-not (Test-Path -LiteralPath $migration)) { throw 'Preview did not import regular layout' }
+            if (-not (Get-Content -LiteralPath $migration -Raw | ConvertFrom-Json).done) { throw 'Preview migration did not complete' }
+            $layout = (Get-Content -LiteralPath $preview -Raw | ConvertFrom-Json).panelLayouts.launcher
+            if ($layout.x -ne 164 -or $layout.y -ne 138) { throw 'Saved layout coordinates were not inherited' }
+            if ((Get-FileHash -LiteralPath $regular -Algorithm SHA256).Hash -ne $regularHash) { throw 'Regular state was modified' }
+            Write-Host 'Preview inherited the existing coordinates without changing regular state.'
+
             "NESTRA_PREVIEW_PID=$($app.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           } catch {
             Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
@@ -78,12 +93,12 @@ jobs:
         if: always() && steps.launch.outcome == 'success'
         shell: pwsh
         run: |
-          "installed_launch=passed" | Set-Content -Encoding ascii preview-artifact/windows-verification.txt
+          "installed_launch=passed`nregular_layout_import=passed" | Set-Content -Encoding ascii preview-artifact/windows-verification.txt
           "global_hotkey=${{ steps.hotkey.outcome }}" | Add-Content -Encoding ascii preview-artifact/windows-verification.txt
           Stop-Process -Id ([uint32]$env:NESTRA_PREVIEW_PID) -Force -ErrorAction SilentlyContinue
       - uses: actions/upload-artifact@v4
         with:
-          name: Nestra-DesktopQuick-Preview-Windows-x64
+          name: Nestra-DesktopQuick-Preview-r2-Windows-x64
           path: preview-artifact/*
           if-no-files-found: error
           retention-days: 14

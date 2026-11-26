@@ -91,6 +91,69 @@ pub fn save(file: &Path, state: &Value, expected: &Value) -> Result<(), String> 
     atomic_write(file, &bytes)
 }
 
+/// Seed the isolated preview from the regular installation exactly once.
+/// The source is read-only, and existing preview settings are archived first.
+#[cfg(any(feature = "desktop-quick-preview", test))]
+pub fn import_regular_layout_once(source: &Path, preview: &Path) -> Result<bool, String> {
+    use sha2::{Digest, Sha256};
+    let _guard = STATE_LOCK.lock().map_err(|e| e.to_string())?;
+    let regular_dir = source.parent().ok_or("常规版配置目录无效")?;
+    let preview_dir = preview.parent().ok_or("试用版配置目录无效")?;
+    if regular_dir == preview_dir { return Err("不可在常规版目录执行迁移".into()); }
+    let journal = preview_dir.join("regular-layout-import-v1.json");
+    let read = |file: &Path| -> Result<Option<Vec<u8>>, String> {
+        match fs::read(file) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    };
+    let digest = |bytes: Option<&[u8]>| bytes.map(|bytes| format!("{:x}", Sha256::digest(bytes)));
+    let pending = read(&journal)?.map(|bytes| parse(&bytes)).transpose()?;
+    if pending.as_ref().is_some_and(|p| p["done"] == true) { return Ok(false); }
+    let current = read(preview)?;
+    let before = digest(current.as_deref());
+    if let Some(record) = &pending {
+        // If a previous attempt completed its write, or the user has since
+        // changed the preview, finish the journal without rewriting anything.
+        if record.get("before").is_none() || record["after"].as_str().is_none() {
+            return Err("试用版迁移记录无效；已保留现有布局".into());
+        }
+        if record["before"] != serde_json::json!(&before) {
+            atomic_write(&journal, br#"{"done":true}"#)?;
+            return Ok(false);
+        }
+    }
+    let source_bytes = read(source)?;
+    let source_value = source_bytes.as_deref().and_then(|bytes| parse(bytes).ok());
+    if source_value.as_ref().and_then(|v| v["schemaVersion"].as_u64()).is_some_and(|v| v > 2) {
+        return Ok(false); // Never roll a newer source back to an older backup.
+    }
+    let candidate = if source_value.as_ref().is_some_and(backup_is_valid) {
+        source_bytes
+    } else {
+        [regular_dir.join("backups/last-good.json"), regular_dir.join("backups/previous.json")]
+            .into_iter().filter_map(|back| read(&back).ok().flatten())
+            .find(|bytes| parse(bytes).ok().as_ref().is_some_and(backup_is_valid))
+    };
+    let Some(candidate) = candidate else { return Ok(false); };
+    let after = digest(Some(&candidate)).expect("candidate digest");
+    if let Some(record) = &pending {
+        if record["after"] != serde_json::json!(&after) { return Ok(false); }
+    } else {
+        if let (Some(bytes), Some(hash)) = (&current, &before) {
+            let backup = preview_dir.join("backups").join(format!("preview-before-layout-import-{hash}.json"));
+            if read(&backup)?.as_ref() != Some(bytes) { atomic_write(&backup, bytes)?; }
+        }
+        let record = serde_json::to_vec(&serde_json::json!({"before": before, "after": after})).map_err(|e| e.to_string())?;
+        atomic_write(&journal, &record)?;
+    }
+    atomic_write(preview, &candidate)?;
+    atomic_write(&preview_dir.join("backups/last-good.json"), &candidate)?;
+    atomic_write(&journal, br#"{"done":true}"#)?;
+    Ok(true)
+}
+
 fn atomic_write(file: &Path, bytes: &[u8]) -> Result<(), String> {
     fs::create_dir_all(file.parent().ok_or("配置目录无效")?).map_err(|e| e.to_string())?;
     let temporary = file.with_extension(format!("{}.{}.tmp", std::process::id(), chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()));
@@ -133,6 +196,43 @@ mod tests {
     }
     impl Drop for Workspace { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
     fn state(name: &str) -> Value { json!({"schemaVersion":2,"panelLayouts":{},"customGroups":[{"id":name,"name":name,"dirName":name}],"widgets":[],"launcherIds":[]}) }
+
+    #[test]
+    fn preview_import_preserves_regular_geometry_and_never_reapplies() {
+        let ws = Workspace::new();
+        let regular = ws.0.join("regular/state.json");
+        let preview = ws.0.join("preview/state.json");
+        let baseline = json!({"schemaVersion":2,"panelLayouts":{"zone:alpha":{
+            "x":317,"y":96,"width":500,"height":300,"monitorId":"monitor-a","visible":true
+        }},"customGroups":[{"id":"alpha","name":"开发","dirName":"开发"}],"widgets":[],"launcherIds":[],
+            "appearance":{"theme":"dark","surfaceMaterial":"glass"}});
+        let bytes = serde_json::to_vec(&baseline).unwrap();
+        atomic_write(&regular, &bytes).unwrap();
+        atomic_write(&preview, br#"{"previewEdit":true}"#).unwrap();
+        assert!(import_regular_layout_once(&regular, &preview).unwrap());
+        assert_eq!(fs::read(&regular).unwrap(), bytes);
+        assert_eq!(parse(&fs::read(&preview).unwrap()).unwrap(), baseline);
+        assert!(fs::read_dir(preview.parent().unwrap().join("backups")).unwrap().flatten()
+            .any(|entry| entry.file_name().to_string_lossy().starts_with("preview-before-layout-import-")
+                && fs::read(entry.path()).unwrap() == br#"{"previewEdit":true}"#));
+        atomic_write(&preview, br#"{"newPreviewEdit":true}"#).unwrap();
+        assert!(!import_regular_layout_once(&regular, &preview).unwrap());
+        assert_eq!(fs::read(&preview).unwrap(), br#"{"newPreviewEdit":true}"#);
+    }
+
+    #[test]
+    fn preview_import_leaves_existing_state_when_regular_is_missing_or_newer() {
+        let ws = Workspace::new();
+        let regular = ws.0.join("regular/state.json");
+        let preview = ws.0.join("preview/state.json");
+        atomic_write(&preview, br#"{"previewEdit":true}"#).unwrap();
+        assert!(!import_regular_layout_once(&regular, &preview).unwrap());
+        atomic_write(&regular, br#"{"schemaVersion":3}"#).unwrap();
+        atomic_write(&regular.parent().unwrap().join("backups/last-good.json"),
+            br#"{"schemaVersion":2,"panelLayouts":{},"customGroups":[],"widgets":[],"launcherIds":[]}"#).unwrap();
+        assert!(!import_regular_layout_once(&regular, &preview).unwrap());
+        assert_eq!(fs::read(&preview).unwrap(), br#"{"previewEdit":true}"#);
+    }
 
     #[test]
     fn save_retains_previous_generation_and_rejects_stale_writers() {

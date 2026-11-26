@@ -43,3 +43,15 @@ test('dedicated global shortcut and tray route use a focusable popup, not the de
   assert.match(native, /"desktop-quick" => session::open_desktop_quick\(app\)/);
   assert.match(native, /HOTKEY_SEARCH: &str = "ctrl\+alt\+f"/);
 });
+
+test('card palette inherits theme/material/corners, has a dark default, and navigation is spatial', () => {
+  assert.equal(context.desktopQuickAppearance().dark, true);
+  const appearance = context.desktopQuickAppearance({ theme: 'light', cornerStyle: 'compact', surfaceMaterial: 'matte', panelOpacity: .75 });
+  assert.equal(appearance.dark, false);
+  assert.equal(appearance.radius, '8px');
+  assert.equal(appearance.material, 'matte');
+  assert.equal(appearance.opacity, .75);
+  assert.equal(context.desktopQuickStep(1, 10, 4, 'ArrowDown'), 5);
+  assert.equal(context.desktopQuickStep(5, 10, 4, 'ArrowRight'), 6);
+  assert.equal(context.desktopQuickStep(9, 10, 4, 'ArrowDown'), 9);
+});

@@ -96,6 +96,15 @@ pub fn run() {
         .setup(|app| {
             #[cfg(windows)]
             desktop_diagnostics::init(app.handle());
+            #[cfg(all(feature = "desktop-quick-preview", not(feature = "ui-test")))]
+            if app.config().identifier == "app.nestra.desktopquickpreview" {
+                if let (Ok(local), Some(preview)) = (app.path().local_data_dir(), paths::state_file(app.handle())) {
+                    let source = local.join("app.nestra.desktop").join("state.json");
+                    if let Err(error) = persistence::import_regular_layout_once(&source, &preview) {
+                        eprintln!("试用版继承常规版布局失败：{error}");
+                    }
+                }
+            }
             prepare_desktop_layer(app.handle())?;
             session::apply_takeover(app.handle());
             clipboard::init(app.handle());

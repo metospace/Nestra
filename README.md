@@ -21,8 +21,8 @@ This is the Tauri port of the original WPF app (`E:\技能包\Guidesk.App`).
   （`%LOCALAPPDATA%\app.nestra.desktop\cache\icons`），前端经 asset 协议加载。
 - **便签 / 待办 / 剪贴板 / 时钟**：控制中心统一管理，隐藏与删除独立处理；内容自动保存。
 - **桌面快开**：在其他应用中按 `Ctrl+Alt+Space`，或从托盘打开「桌面快开」，不用返回桌面。
-  弹窗直接列出个人/公共桌面、收纳区和映射文件夹项目，可按来源筛选，不依赖 Everything。
-  输入关键词后用 ↑↓ 选择、Enter 打开；Esc 或切换到别的窗口关闭。原有 `Ctrl+Alt+F` 搜索保留。
+  卡片承接桌面主题、圆角和材质，异步加载原生图标；可浏览个人/公共桌面、收纳区和映射文件夹，不依赖 Everything。
+  输入关键词后用方向键选择、Enter 打开；Esc 或切换到别的窗口关闭。原有 `Ctrl+Alt+F` 搜索保留。
 - **快捷启动与搜索**：快捷启动只保存引用；打开原始快捷方式保留启动参数。
   搜索热键 `Ctrl+Alt+F`；使用独立搜索窗口，可搜索开始菜单和已安装应用目录。
   “全部”和“Everything”通过本机 Everything IPC 查询已索引的磁盘文件；
