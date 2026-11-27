@@ -12,14 +12,14 @@ export const listConfigurationBackups = (): Promise<ConfigurationBackup[]> => in
 export const exportConfiguration = (folder: string): Promise<string> => invoke("export_configuration", { folder });
 export const readConfiguration = (path: string): Promise<unknown> => invoke("read_configuration", { path });
 export interface StorageZone { dirName: string; path: string; itemCount: number }
-export const listStorageZones = (): Promise<StorageZone[]> => invoke("list_storage_zones");
+export const listStorageZones = (quick?: boolean): Promise<StorageZone[]> => invoke("list_storage_zones", { quick });
 
-export function scanDesktop(): Promise<DesktopEntry[]> {
-  return invoke<DesktopEntry[]>("scan_desktop");
+export function scanDesktop(quick?: boolean): Promise<DesktopEntry[]> {
+  return invoke<DesktopEntry[]>("scan_desktop", { quick });
 }
 
-export function scanFolder(path: string): Promise<DesktopEntry[]> {
-  return invoke("scan_folder", { path });
+export function scanFolder(path: string, quick?: boolean): Promise<DesktopEntry[]> {
+  return invoke("scan_folder", { path, quick });
 }
 
 export function scanPaths(paths: string[]): Promise<DesktopEntry[]> {
@@ -75,14 +75,14 @@ export function resolveIconPairs(
   return invoke("resolve_icon_pairs", { pairs });
 }
 
-export function openEntry(target: string, launchKind: string): Promise<void> {
-  return invoke("open_entry", { target, launchKind });
+export function openEntry(target: string, launchKind: string, quick?: boolean): Promise<void> {
+  return invoke("open_entry", { target, launchKind, quick });
 }
 
 /** Let the Windows shell launch the original shortcut, including its arguments,
  * working directory, elevation and advertised application metadata. */
-export function launchEntry(entry: DesktopEntry): Promise<void> {
-  return openEntry(entry.kind === "shell" ? entry.target : entry.path, entry.launchKind);
+export function launchEntry(entry: DesktopEntry, quick?: boolean): Promise<void> {
+  return openEntry(entry.kind === "shell" ? entry.target : entry.path, entry.launchKind, quick);
 }
 
 export function showManager(module?: string, objectId?: string): Promise<void> {

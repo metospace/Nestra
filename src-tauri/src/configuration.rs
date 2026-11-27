@@ -13,7 +13,7 @@ pub struct Backup { pub name: String, pub path: String, pub created_at: String }
 pub struct StorageZone { pub dir_name: String, pub path: String, pub item_count: usize }
 
 #[tauri::command]
-pub async fn list_storage_zones() -> Result<Vec<StorageZone>, String> {
+pub async fn list_storage_zones(quick: Option<bool>) -> Result<Vec<StorageZone>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let root = crate::scanner::storage_root().ok_or("无法确定桌面目录")?;
         if !root.exists() { return Ok(vec![]); }
@@ -21,7 +21,7 @@ pub async fn list_storage_zones() -> Result<Vec<StorageZone>, String> {
         for item in fs::read_dir(root).map_err(|e| e.to_string())? {
             let item = item.map_err(|e| e.to_string())?;
             if !item.file_type().map_err(|e| e.to_string())?.is_dir() { continue; }
-            let count = fs::read_dir(item.path()).map_err(|e| e.to_string())?.flatten().filter(|entry| !entry.file_name().to_string_lossy().eq_ignore_ascii_case("desktop.ini")).count();
+            let count = if quick.unwrap_or(false) { 0 } else { fs::read_dir(item.path()).map_err(|e| e.to_string())?.flatten().filter(|entry| !entry.file_name().to_string_lossy().eq_ignore_ascii_case("desktop.ini")).count() };
             zones.push(StorageZone { dir_name: item.file_name().to_string_lossy().into_owned(), path: item.path().to_string_lossy().into_owned(), item_count: count });
         }
         zones.sort_by(|a,b| a.dir_name.cmp(&b.dir_name));

@@ -89,6 +89,22 @@ fn push_entry(
     can_manage: bool,
     zone: Option<String>,
 ) {
+    let meta = full_path.metadata().ok();
+    append_entry(by_identity, full_path, label, can_manage, zone, meta, true);
+}
+
+fn push_quick_entry(by_identity: &mut HashMap<String, DesktopEntry>, entry: fs::DirEntry, label: &str, zone: Option<String>) {
+    // Windows DirEntry can reuse the attributes from directory enumeration.
+    // A reparse point still needs to be recognized as a directory, without opening its target.
+    let Ok(meta) = entry.metadata() else { return; };
+    append_entry(by_identity, entry.path(), label, false, zone, Some(meta), false);
+}
+
+fn append_entry(
+    by_identity: &mut HashMap<String, DesktopEntry>, full_path: PathBuf, label: &str,
+    can_manage: bool, zone: Option<String>, meta: Option<fs::Metadata>, resolve_target: bool,
+) {
+    use std::os::windows::fs::MetadataExt;
     let name = name_of(&full_path);
     if name.is_empty() || name.eq_ignore_ascii_case("desktop.ini") {
         return;
@@ -99,15 +115,18 @@ fn push_entry(
         .extension()
         .map(|value| format!(".{}", value.to_string_lossy().to_lowercase()))
         .unwrap_or_default();
-    let meta = full_path.metadata().ok();
-    let is_dir = full_path.is_dir();
+    let is_dir = if resolve_target {
+        meta.as_ref().is_some_and(fs::Metadata::is_dir)
+    } else {
+        meta.as_ref().is_some_and(|info| info.file_attributes() & 0x10 != 0)
+    };
 
     let (target, kind) = if is_dir {
         (Some(full_path.to_string_lossy().into_owned()), "folder")
     } else if ext == ".lnk" {
-        (resolve_lnk(&full_path), "shortcut")
+        (if resolve_target { resolve_lnk(&full_path) } else { None }, "shortcut")
     } else if ext == ".url" {
-        (resolve_url(&full_path), "url")
+        (if resolve_target { resolve_url(&full_path) } else { None }, "url")
     } else if ext == ".appref-ms" {
         (Some(full_path.to_string_lossy().into_owned()), "appref")
     } else {
@@ -118,7 +137,6 @@ fn push_entry(
     let hidden = meta
         .as_ref()
         .map(|info| {
-            use std::os::windows::fs::MetadataExt;
             info.file_attributes() & 0x2 != 0
         })
         .unwrap_or(false);
@@ -262,14 +280,15 @@ pub fn indexed_entry(path: &str, folder: bool) -> Option<DesktopEntry> {
     })
 }
 
-pub fn scan_folder(path: &str) -> Result<Vec<DesktopEntry>, String> {
+pub fn scan_folder(path: &str, quick: bool) -> Result<Vec<DesktopEntry>, String> {
     let root = Path::new(path);
     if !root.is_absolute() { return Err("请输入文件夹的完整路径".into()); }
     let items = fs::read_dir(root).map_err(|e| format!("无法读取文件夹：{e}"))?;
     let mut entries = HashMap::new();
     for item in items {
         let item = item.map_err(|e| e.to_string())?;
-        push_entry(&mut entries, item.path(), "映射文件夹", false, Some(path.to_string()));
+        if quick { push_quick_entry(&mut entries, item, "映射文件夹", Some(path.to_string())); }
+        else { push_entry(&mut entries, item.path(), "映射文件夹", false, Some(path.to_string())); }
     }
     Ok(entries.into_values().collect())
 }
@@ -315,7 +334,7 @@ pub fn search_folders(paths: &[String], query: &str, limit: usize) -> Vec<Deskto
     entries.into_values().take(limit).collect()
 }
 
-pub fn scan_desktop() -> Vec<DesktopEntry> {
+pub fn scan_desktop(quick: bool) -> Vec<DesktopEntry> {
     let mut by_identity = HashMap::new();
     let desktop = known_folder(&FOLDERID_DESKTOP);
     let public = known_folder(&FOLDERID_PUBLICDESKTOP);
@@ -335,7 +354,8 @@ pub fn scan_desktop() -> Vec<DesktopEntry> {
             if name.eq_ignore_ascii_case(".nestra") {
                 continue;
             }
-            push_entry(&mut by_identity, entry.path(), label, can_manage, None);
+            if quick { push_quick_entry(&mut by_identity, entry, label, None); }
+            else { push_entry(&mut by_identity, entry.path(), label, can_manage, None); }
         }
     }
 
@@ -350,13 +370,14 @@ pub fn scan_desktop() -> Vec<DesktopEntry> {
                 let zone_name = zone_dir.file_name().to_string_lossy().into_owned();
                 if let Ok(items) = fs::read_dir(zone_dir.path()) {
                     for item in items.flatten() {
-                        push_entry(
+                        if quick { push_quick_entry(&mut by_identity, item, "收纳区", Some(zone_name.clone())); }
+                        else { push_entry(
                             &mut by_identity,
                             item.path(),
                             "收纳区",
                             true,
                             Some(zone_name.clone()),
-                        );
+                        ); }
                     }
                 }
             }
@@ -412,7 +433,7 @@ mod tests {
         for suffix in ["exe", "bat", "cmd", "lnk", "url", "appref-ms"] {
             std::fs::create_dir(root.join(format!("资料.{suffix}"))).unwrap();
         }
-        let entries = scan_folder(&root.to_string_lossy()).unwrap();
+        let entries = scan_folder(&root.to_string_lossy(), false).unwrap();
         assert_eq!(entries.len(), 6);
         for entry in entries {
             assert_eq!(entry.kind, "folder");
@@ -421,6 +442,29 @@ mod tests {
             assert_eq!(entry.target, entry.path);
             assert_eq!(entry.id, indexed_entry(&entry.path, true).unwrap().id);
         }
+    }
+
+    #[test]
+    fn quick_folder_listing_does_not_read_shortcut_targets() {
+        let root = std::env::temp_dir().join(format!("nestra-quick-list-{}-{}",
+            std::process::id(), chrono::Local::now().timestamp_nanos_opt().unwrap()));
+        std::fs::create_dir(&root).unwrap();
+        struct TestDirectory(PathBuf);
+        impl Drop for TestDirectory { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
+        let _cleanup = TestDirectory(root.clone());
+        let shortcut = root.join("example.url");
+        std::fs::write(&shortcut, "[InternetShortcut]\nURL=https://example.invalid/\n").unwrap();
+        std::fs::write(root.join("desktop.ini"), "").unwrap();
+        std::fs::create_dir(root.join("folder.lnk")).unwrap();
+        let path = root.to_string_lossy();
+        let quick = scan_folder(&path, true).unwrap();
+        assert_eq!(quick.len(), 2);
+        let link = quick.iter().find(|item| item.kind == "url").unwrap();
+        assert_eq!(link.target, link.path);
+        assert!(link.is_application);
+        assert!(quick.iter().any(|item| item.kind == "folder" && !item.is_application));
+        let regular = scan_folder(&path, false).unwrap();
+        assert_eq!(regular.iter().find(|item| item.kind == "url").unwrap().target, "https://example.invalid/");
     }
 
     #[test]
@@ -448,7 +492,7 @@ mod tests {
         std::fs::write(root.join("top-level.txt"), b"top").unwrap();
         let root_text = root.to_string_lossy().into_owned();
 
-        let panel = scan_folder(&root_text).unwrap();
+        let panel = scan_folder(&root_text, false).unwrap();
         assert_eq!(panel.len(), 2);
         assert!(panel.iter().all(|entry| entry.name != "quarterly-report"));
 

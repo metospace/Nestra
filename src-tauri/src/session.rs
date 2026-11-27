@@ -111,6 +111,10 @@ pub fn open_desktop_quick(app: &AppHandle) {
             "visible": window.is_visible().ok(), "focused": window.is_focused().ok(),
         }));
         let _ = app.emit_to("desktop-quick", "nestra://desktop-quick-open", ());
+        #[cfg(windows)]
+        if _shown.is_ok() {
+            tauri::async_runtime::spawn_blocking(crate::shell_worker::prepare_quick_open);
+        }
     }
 }
 

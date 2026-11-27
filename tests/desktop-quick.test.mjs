@@ -89,3 +89,24 @@ test('types and saved sort distinguish entering folders from launching entries',
   assert.equal(context.orderQuickLocation([doc,folder,app],['doc'])[0].id,'doc');
   assert.equal(context.quickPathKey('D:\\docs\\'),'d:/docs');
 });
+
+test('global searches leave capacity for explicitly entered folders', () => {
+  assert.equal(context.quickScanBudget(0, false), 2);
+  assert.equal(context.quickScanBudget(2, false), 0);
+  assert.equal(context.quickScanBudget(2, true), 2);
+  assert.equal(context.quickScanBudget(3, true), 1);
+  assert.equal(context.quickScanBudget(4, true), 0);
+});
+
+test('keyboard Enter keeps the selected Windows path across late results', () => {
+  const weak = item('2026 inventory.txt', 'X:/2026 inventory.txt', 'mappings', 'Archive');
+  const strong = item('inventory.txt', 'Y:/inventory.txt', 'mappings', 'Inventory');
+  const path = context.quickPathKey(weak.entry.path);
+  const first = context.desktopQuickResults([weak], 'all', 'inventory');
+  const reranked = context.desktopQuickResults([weak, strong], 'all', 'inventory');
+  assert.equal(context.quickResultIndex(first, path), 0);
+  assert.equal(context.quickResultIndex(reranked, path), 1);
+  assert.equal(context.quickEnterResult(reranked, path).entry.path, weak.entry.path);
+  assert.equal(context.quickEnterResult(reranked, null).entry.path, strong.entry.path);
+  assert.equal(context.quickEnterResult([strong], path), undefined);
+});
