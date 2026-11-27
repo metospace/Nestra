@@ -102,3 +102,16 @@ export function orderQuickLocation(entries: DesktopEntry[], ids: string[]): Desk
     || Number(b.kind === 'folder') - Number(a.kind === 'folder')
     || a.name.localeCompare(b.name, 'zh-Hans-CN'));
 }
+
+/** Reserve capacity for explicit navigation when global search has slow shares. */
+export function quickScanBudget(pending: number, direct: boolean): number {
+  return Math.max(0, (direct ? 4 : 2) - pending);
+}
+
+export function quickResultIndex(results: QuickEntry[], activePath: string | null): number {
+  return activePath === null ? -1 : results.findIndex(({ entry }) => quickPathKey(entry.path) === activePath);
+}
+
+export function quickEnterResult(results: QuickEntry[], activePath: string | null): QuickEntry | undefined {
+  return results[activePath === null ? 0 : quickResultIndex(results, activePath)];
+}

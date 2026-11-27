@@ -37,8 +37,8 @@ pub async fn scan_paths(paths: Vec<String>) -> Result<Vec<scanner::DesktopEntry>
 }
 
 #[tauri::command]
-pub async fn scan_folder(path: String) -> Result<Vec<scanner::DesktopEntry>, String> {
-    tauri::async_runtime::spawn_blocking(move || scanner::scan_folder(&path)).await.map_err(|e| e.to_string())?
+pub async fn scan_folder(path: String, quick: Option<bool>) -> Result<Vec<scanner::DesktopEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || scanner::scan_folder(&path, quick.unwrap_or(false))).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -243,8 +243,8 @@ pub fn set_hit_rects(rects: Vec<HitRect>) {
 }
 
 #[tauri::command]
-pub async fn scan_desktop() -> Vec<scanner::DesktopEntry> {
-    tauri::async_runtime::spawn_blocking(scanner::scan_desktop)
+pub async fn scan_desktop(quick: Option<bool>) -> Vec<scanner::DesktopEntry> {
+    tauri::async_runtime::spawn_blocking(move || scanner::scan_desktop(quick.unwrap_or(false)))
         .await
         .unwrap_or_default()
 }
@@ -264,12 +264,24 @@ pub async fn resolve_icon_pairs(
 }
 
 #[tauri::command]
-pub async fn open_entry(target: String, launch_kind: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || open_entry_blocking(target, launch_kind))
+pub async fn open_entry(target: String, launch_kind: String, quick: Option<bool>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let quick = quick.unwrap_or(false);
+        #[cfg(all(windows, feature = "desktop-quick-preview"))]
+        let start = std::time::Instant::now();
+        let result = open_entry_blocking(target, launch_kind, quick);
+        #[cfg(all(windows, feature = "desktop-quick-preview"))]
+        if quick {
+            crate::desktop_diagnostics::record("quick-launch-dispatch", serde_json::json!({
+                "elapsed_ms": start.elapsed().as_millis() as u64, "accepted": result.is_ok(),
+            }));
+        }
+        result
+    })
         .await.map_err(|e| e.to_string())?
 }
 
-fn open_entry_blocking(target: String, launch_kind: String) -> Result<(), String> {
+fn open_entry_blocking(target: String, launch_kind: String, quick: bool) -> Result<(), String> {
     if launch_kind == "shell" || target.starts_with("shell:") || target.starts_with("http") {
         // Explorer resolves `shell:` URIs such as MyComputerFolder.
         std::process::Command::new("explorer.exe")
@@ -280,7 +292,12 @@ fn open_entry_blocking(target: String, launch_kind: String) -> Result<(), String
         return Ok(());
     }
 
-    shell_execute_open(&target)?;
+    if quick {
+        #[cfg(windows)]
+        crate::shell_worker::execute_open_quick(&target)?;
+        #[cfg(not(windows))]
+        shell_execute_open(&target)?;
+    } else { shell_execute_open(&target)?; }
     remember_launch(&target);
     Ok(())
 }

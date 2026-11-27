@@ -39,7 +39,7 @@ jobs:
           $setups = @(Get-ChildItem src-tauri/target/release/bundle/nsis -Filter '*-setup.exe' -File)
           if ($setups.Count -ne 1) { throw "Expected exactly one NSIS installer, got $($setups.Count)" }
           $out = New-Item -ItemType Directory -Force preview-artifact
-          $name = 'Nestra-DesktopQuick-Preview_0.1.0-r3_x64-setup.exe'
+          $name = 'Nestra-DesktopQuick-Preview_0.1.0-r5_x64-setup.exe'
           $candidate = Join-Path $out.FullName $name
           Copy-Item $setups[0].FullName $candidate
           $hash = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -115,7 +115,7 @@ jobs:
           Stop-Process -Id ([uint32]$env:NESTRA_PREVIEW_PID) -Force -ErrorAction SilentlyContinue
       - uses: actions/upload-artifact@v4
         with:
-          name: Nestra-DesktopQuick-Preview-r3-Windows-x64
+          name: Nestra-DesktopQuick-Preview-r5-Windows-x64
           path: preview-artifact/*
           if-no-files-found: error
           retention-days: 14

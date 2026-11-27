@@ -3,7 +3,7 @@
 //! startup and the single-instance lock. The organizer never loads those DLLs.
 #![cfg(windows)]
 
-use std::{io::{Read, Write}, os::windows::process::CommandExt, process::{Child, Command, Stdio}, time::{Duration, Instant}};
+use std::{io::{Read, Write}, os::windows::{io::AsRawHandle, process::CommandExt}, process::{Child, Command, Stdio}, time::{Duration, Instant}};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -59,28 +59,84 @@ pub fn run_if_requested() -> bool {
 
 /// Wait without letting a hung extension block the organizer indefinitely.
 fn wait_for(child: &mut Child, timeout: Duration) -> Result<(), String> {
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => return Err(format!("系统扩展异常退出（{status}）")),
-            Ok(None) if start.elapsed() < timeout => std::thread::sleep(Duration::from_millis(25)),
-            outcome => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(match outcome { Err(e) => e.to_string(), _ => "系统扩展响应超时".into() });
-            }
+    use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
+    use windows::Win32::System::Threading::WaitForSingleObject;
+    // Wake as soon as Windows signals the worker; don't quantize each launch
+    // to a 25 ms sleep loop. The child owns the borrowed handle until we reap it.
+    let budget = timeout.as_millis().min((u32::MAX - 1) as u128) as u32;
+    let result = unsafe { WaitForSingleObject(HANDLE(child.as_raw_handle()), budget) };
+    match result {
+        WAIT_OBJECT_0 => {
+            let status = child.wait().map_err(|err| err.to_string())?;
+            if status.success() { Ok(()) } else { Err(format!("系统扩展异常退出（{status}）")) }
+        }
+        other => {
+            let error = if other == WAIT_TIMEOUT { "系统扩展响应超时".into() }
+                else { std::io::Error::last_os_error().to_string() };
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(error)
         }
     }
+}
+
+static QUICK_STANDBY: std::sync::Mutex<Option<(Child, Instant)>> = std::sync::Mutex::new(None);
+const QUICK_LEASE: Duration = Duration::from_secs(30);
+
+fn spawn_worker() -> Result<Child, String> {
+    Command::new(std::env::current_exe().map_err(|e| e.to_string())?)
+        .arg(WORKER_ARG).creation_flags(0x08000000)
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
+        .spawn().map_err(|e| e.to_string())
+}
+
+fn reap_worker(mut child: Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Keep at most one short-lived, single-use helper waiting for stdin. No path
+/// or foreground permission is passed until a real user launch.
+pub fn prepare_quick_open() {
+    let mut slot = match QUICK_STANDBY.try_lock() { Ok(slot) => slot, Err(_) => return };
+    if slot.is_some() { return; }
+    let Ok(child) = spawn_worker() else { return; };
+    let started = Instant::now();
+    *slot = Some((child, started));
+    drop(slot);
+    tauri::async_runtime::spawn_blocking(move || {
+        std::thread::sleep(QUICK_LEASE);
+        let expired = QUICK_STANDBY.lock().ok().and_then(|mut slot| {
+            if slot.as_ref().is_some_and(|(_, time)| *time == started) { slot.take() }
+            else { None }
+        });
+        if let Some((child, _)) = expired { reap_worker(child); }
+    });
+}
+
+pub fn execute_open_quick(target: &str) -> Result<(), String> {
+    let standby = QUICK_STANDBY.try_lock().ok().and_then(|mut slot| slot.take());
+    let child = match standby {
+        Some((mut child, started)) if started.elapsed() < QUICK_LEASE => {
+            match child.try_wait() {
+                Ok(None) => child,
+                _ => { reap_worker(child); spawn_worker()? }
+            }
+        }
+        Some((child, _)) => { reap_worker(child); spawn_worker()? }
+        None => spawn_worker()?,
+    };
+    execute_with_child(child, &Request::Open { target: target.into() }, Duration::from_secs(30))?;
+    Ok(())
 }
 
 /// All communication uses pipes, so Unicode paths never pass through a shell
 /// command line. CREATE_NO_WINDOW keeps helper consoles out of the desktop.
 pub fn execute(request: &Request, timeout: Duration) -> Result<Value, String> {
-    let mut child = Command::new(std::env::current_exe().map_err(|e| e.to_string())?)
-        .arg(WORKER_ARG).creation_flags(0x08000000)
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
-        .spawn().map_err(|e| e.to_string())?;
+    execute_with_child(spawn_worker()?, request, timeout)
+}
+
+fn execute_with_child(mut child: Child, request: &Request, timeout: Duration) -> Result<Value, String> {
     // Register before sending the request: the worker cannot activate its menu
     // before the desktop layer knows its identity. RAII removes it on every
     // input failure, timeout, crash and successful completion.

@@ -89,3 +89,47 @@ test('types and saved sort distinguish entering folders from launching entries',
   assert.equal(context.orderQuickLocation([doc,folder,app],['doc'])[0].id,'doc');
   assert.equal(context.quickPathKey('D:\\docs\\'),'d:/docs');
 });
+
+test('global searches leave capacity for explicitly entered folders', () => {
+  assert.equal(context.quickScanBudget(0, false), 2);
+  assert.equal(context.quickScanBudget(2, false), 0);
+  assert.equal(context.quickScanBudget(2, true), 2);
+  assert.equal(context.quickScanBudget(3, true), 1);
+  assert.equal(context.quickScanBudget(4, true), 0);
+});
+
+test('keyboard Enter keeps the selected Windows path across late results', () => {
+  const weak = item('2026 inventory.txt', 'X:/2026 inventory.txt', 'mappings', 'Archive');
+  const strong = item('inventory.txt', 'Y:/inventory.txt', 'mappings', 'Inventory');
+  const path = context.quickPathKey(weak.entry.path);
+  const first = context.desktopQuickResults([weak], 'all', 'inventory');
+  const reranked = context.desktopQuickResults([weak, strong], 'all', 'inventory');
+  assert.equal(context.quickResultIndex(first, path), 0);
+  assert.equal(context.quickResultIndex(reranked, path), 1);
+  assert.equal(context.quickEnterResult(reranked, path).entry.path, weak.entry.path);
+  assert.equal(context.quickEnterResult(reranked, null).entry.path, strong.entry.path);
+  assert.equal(context.quickEnterResult([strong], path), undefined);
+});
+
+test('folder card clicks and Enter launch the original entry rather than scanning its children', async () => {
+  const ui = file('src/features/DesktopQuickWindow.tsx');
+  const activate = ui.match(/function activate\(entry: DesktopEntry\) \{[\s\S]*?\n  \}/)?.[0];
+  assert.ok(activate);
+  assert.match(ui, /onClick=\{\(\) => activate\(entry\)\}/);
+  assert.match(ui, /const item = quickEnterResult\(results, activePath\);[\s\S]*?activate\(item.entry\)/);
+  const ctx = vm.createContext({ calls: [] });
+  const launchEntry = file('src/lib/tauri.ts').match(/export function launchEntry\([\s\S]*?\n\}/)?.[0].replace(/^export /,'');
+  assert.ok(launchEntry);
+  vm.runInContext(ts.transpile(`
+    const openEntry = (...args) => calls.push(args);
+    const launch = (action) => action();
+    ${launchEntry}
+    ${activate}
+    activate({ name: "Folder", kind: "folder", path: "C:/Test Folder", launchKind: "filesystem" });
+    activate({ name: "Folder Shortcut", kind: "shortcut", path: "C:/Link.lnk", target: "D:/Target", launchKind: "filesystem" });
+  `), ctx);
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.calls)), [
+    ['C:/Test Folder', 'filesystem', true], ['C:/Link.lnk', 'filesystem', true],
+  ]);
+  assert.doesNotMatch(activate, /scanFolder|navigate/);
+});
