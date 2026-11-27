@@ -22,7 +22,6 @@ const typeInfo = {
   app: { label: '应用', icon: AppWindow },
   system: { label: '系统', icon: Monitor },
 };
-type Crumb = { name: string; path: string };
 type Directory = { entries: DesktopEntry[]; error?: boolean };
 
 export default function DesktopQuickWindow() {
@@ -32,7 +31,6 @@ export default function DesktopQuickWindow() {
   const [directories, setDirectories] = useState<Record<string, Directory>>({});
   const [epoch, setEpoch] = useState(0);
   const [placeId, setPlaceId] = useState('overview');
-  const [trail, setTrail] = useState<Crumb[]>([]);
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState<'all' | QuickItemKind>('all');
   const [activePath, setActivePath] = useState<string | null>(null);
@@ -57,8 +55,7 @@ export default function DesktopQuickWindow() {
   })).filter(section => section.places.length > 0);
   const tabPlaceIds = new Set(tabSections.flatMap(section => section.places.map(p => p.id)));
   const place = places.find(p => p.id === placeId);
-  const currentFolder = trail.at(-1);
-  const currentPath = currentFolder?.path ?? place?.path;
+  const currentPath = place?.path;
   const explorerPath = currentPath ?? place?.physicalPath;
   const allSearch = !place && !!query.trim();
   const searchPaths = useMemo(() => {
@@ -83,9 +80,9 @@ export default function DesktopQuickWindow() {
     const local = from(place, currentPath);
     if (query.trim()) return desktopQuickResults(local, 'all', query);
     const byId = new Map(local.map(item => [item.entry.id, item]));
-    return orderQuickLocation(local.map(item => item.entry), !currentFolder && place.group ? snapshot?.itemOrders?.[place.group.id] ?? [] : [])
+    return orderQuickLocation(local.map(item => item.entry), place.group ? snapshot?.itemOrders?.[place.group.id] ?? [] : [])
       .map(entry => byId.get(entry.id)!);
-  }, [place, currentPath, currentFolder, allSearch, places, directories, desktop, kind, query, snapshot]);
+  }, [place, currentPath, allSearch, places, directories, desktop, kind, query, snapshot]);
   const selected = quickResultIndex(results, activePath);
   const visibleLimit = Math.max(limit, selected + 1);
 
@@ -94,7 +91,7 @@ export default function DesktopQuickWindow() {
     function refresh() {
       const run = ++generation.current;
       const fresh = () => live && run === generation.current;
-      setPlaceId('overview'); setTrail([]); setQuery(''); setKind('all'); setActivePath(null); setLimit(PAGE_SIZE);
+      setPlaceId('overview'); setQuery(''); setKind('all'); setActivePath(null); setLimit(PAGE_SIZE);
       setDirectories({}); setEpoch(run);
       setFailure(''); setNotice(''); setLoading(true); setLaunching(null);
       input.current?.focus();
@@ -141,21 +138,26 @@ export default function DesktopQuickWindow() {
   }, [theme.dark]);
 
   useEffect(() => {
-    if (iconPending.current.size) return;
+    if (launching || iconPending.current.size) return;
     const missing = results.slice(0, visibleLimit).filter(({ entry, scope }) => entry.kind !== 'shell'
       && (scope !== 'mappings' || quickItemKind(entry) === 'app')
       && !iconCache.current.has(entry.path)).slice(0, 8);
     if (!missing.length) return;
-    for (const { entry } of missing) iconPending.current.add(entry.path);
-    void resolveIconPairs(missing.map(({ entry }) => [entry.path, entry.target || entry.path]))
-      .catch((): Record<string, string | null> => ({})).then(resolved => {
-        for (const { entry } of missing) {
-          iconPending.current.delete(entry.path);
-          iconCache.current.set(entry.path, iconSrc(resolved[entry.path] ?? null));
-        }
-        setIcons(Object.fromEntries(iconCache.current));
-      });
-  }, [results, visibleLimit, icons]);
+    // Give the user a chance to launch before starting work for decorative icons.
+    const timer = window.setTimeout(() => {
+      if (opening.current) return;
+      for (const { entry } of missing) iconPending.current.add(entry.path);
+      void resolveIconPairs(missing.map(({ entry }) => [entry.path, entry.target || entry.path]))
+        .catch((): Record<string, string | null> => ({})).then(resolved => {
+          for (const { entry } of missing) {
+            iconPending.current.delete(entry.path);
+            iconCache.current.set(entry.path, iconSrc(resolved[entry.path] ?? null));
+          }
+          setIcons(Object.fromEntries(iconCache.current));
+        });
+    }, 160);
+    return () => window.clearTimeout(timer);
+  }, [results, visibleLimit, icons, launching]);
 
   useEffect(() => {
     if (selected >= 0) list.current?.querySelector('[data-quick-active="true"]')?.scrollIntoView({ block: 'nearest' });
@@ -166,13 +168,12 @@ export default function DesktopQuickWindow() {
     setActivePath(null); setLimit(PAGE_SIZE);
     if (list.current) list.current.scrollTop = 0;
   }
-  function navigate(id: string, crumbs: Crumb[] = []) {
-    setPlaceId(id); setTrail(crumbs); setQuery(''); setKind('all'); setFailure(''); resetSelection();
+  function navigate(id: string) {
+    setPlaceId(id); setQuery(''); setKind('all'); setFailure(''); resetSelection();
     input.current?.focus();
   }
   function back() {
-    if (trail.length) navigate(placeId, trail.slice(0, -1));
-    else if (place || allSearch) navigate('overview');
+    if (place || allSearch) navigate('overview');
   }
   function retry(path: string) {
     const key = quickPathKey(path);
@@ -188,12 +189,9 @@ export default function DesktopQuickWindow() {
     catch { if (job === generation.current) setFailure(`无法打开「${name}」，请确认它仍然可用。`); }
     finally { opening.current = false; if (job === generation.current) setLaunching(null); }
   }
-  function activate(entry: DesktopEntry, locationId?: string) {
-    if (entry.kind === 'folder') {
-      const root = place ?? places.find(p => p.id === locationId);
-      if (root) navigate(root.id, [...trail, { name: entry.name, path: entry.path }]);
-      return;
-    }
+  function activate(entry: DesktopEntry) {
+    // A card is an operating-system launch, never a directory navigation.
+    // Pass the original shortcut (not its target) to keep Shell semantics.
     void launch(() => launchEntry(entry, true), entry.name);
   }
   function handleKey(event: KeyboardEvent) {
@@ -213,13 +211,11 @@ export default function DesktopQuickWindow() {
       const item = quickEnterResult(results, activePath);
       if (!item) return;
       event.preventDefault();
-      if (event.altKey && item.entry.kind === 'folder')
-        void launch(() => openEntry(item.entry.path, 'path', true), item.entry.name);
-      else activate(item.entry, item.locationId);
+      activate(item.entry);
     }
   }
   const overview = !place && !allSearch;
-  const title = currentFolder?.name ?? place?.title ?? (allSearch ? '搜索结果' : '位置总览');
+  const title = place?.title ?? (allSearch ? '搜索结果' : '位置总览');
   return <main className="search-window desktop-quick-window" onKeyDown={handleKey} aria-labelledby="desktop-quick-title"
     data-material={theme.material} style={{ '--quick-radius': theme.radius, '--quick-opacity': theme.opacity } as CSSProperties}>
     <header className="desktop-quick-heading">
@@ -258,10 +254,6 @@ export default function DesktopQuickWindow() {
         <div className="desktop-quick-context">
           <nav className="desktop-quick-crumbs" aria-label="当前位置">
             {(place || allSearch) && <Button variant="ghost" size="icon-xs" aria-label="返回上一级" title="Alt + ←" onClick={back}><ArrowLeft/></Button>}
-            {place && trail.length > 0 && <>
-              <button type="button" onClick={() => navigate(place.id)} title={place.title}>{place.title}</button><ChevronRight size={12}/>
-              {trail.slice(0, -1).map((crumb, i) => <span className="desktop-quick-crumb-part" key={crumb.path}><button type="button" onClick={() => navigate(place.id, trail.slice(0, i + 1))} title={crumb.name}>{crumb.name}</button><ChevronRight size={12}/></span>)}
-            </>}
             <h2 title={currentPath || title}>{title}</h2>
           </nav>
           {explorerPath && <Button variant="ghost" size="icon-xs" title="在资源管理器中打开此文件夹" aria-label="在资源管理器中打开此文件夹"
@@ -299,12 +291,12 @@ export default function DesktopQuickWindow() {
             </section>)}
           </> : <>
             <div ref={grid} className="desktop-quick-grid" role="list" aria-label="桌面项目">
-              {results.slice(0, visibleLimit).map(({ entry, source, locationId }, index) => {
+              {results.slice(0, visibleLimit).map(({ entry, source }, index) => {
                 const type = quickItemKind(entry); const { icon: Icon, label } = typeInfo[type];
                 const extension = type === 'file' ? entry.name.match(/\.([a-z\d]{1,7})$/i)?.[1]?.toUpperCase() : undefined;
-                return <div key={entry.id} className="desktop-quick-result-cell" role="listitem">
+                return <div key={entry.id} role="listitem">
                   <button type="button" className={`desktop-quick-result ${selected === index ? 'is-active' : ''}`} data-kind={type}
-                    data-quick-active={selected === index} title={entry.path} onClick={() => activate(entry, locationId)}>
+                    data-quick-active={selected === index} title={type === 'folder' ? `在资源管理器中打开：${entry.path}` : entry.path} onClick={() => activate(entry)}>
                     <span className="desktop-quick-icon" aria-hidden="true">
                       {icons[entry.path] ? <img src={icons[entry.path]!} alt="" onError={() => {
                         iconCache.current.set(entry.path, null); setIcons(current => ({ ...current, [entry.path]: null }));
@@ -313,9 +305,6 @@ export default function DesktopQuickWindow() {
                     <strong>{entry.name}</strong>
                     <span className="desktop-quick-source">{allSearch ? source : extension || label}</span>
                   </button>
-                  {type === 'folder' && <Button variant="ghost" size="icon-xs" className="desktop-quick-folder-open"
-                    aria-label={`在资源管理器中打开「${entry.name}」`} title="在资源管理器中打开 (Alt+Enter)"
-                    onClick={() => void launch(() => openEntry(entry.path, 'path', true), entry.name)}><ExternalLink/></Button>}
                 </div>;
               })}
             </div>
@@ -327,6 +316,6 @@ export default function DesktopQuickWindow() {
         </div>
       </section>
     </div>
-    <footer className="desktop-quick-footer"><span><kbd>↑↓←→</kbd> 选择 <kbd>Enter</kbd> 打开 <kbd>Alt+Enter</kbd> 用资源管理器打开文件夹 <kbd>Esc</kbd> 关闭</span><span><kbd>Ctrl + Alt + Space</kbd> 呼出</span></footer>
+    <footer className="desktop-quick-footer"><span><kbd>↑↓←→</kbd> 选择 <kbd>Enter</kbd> 打开 <kbd>Esc</kbd> 关闭</span><span><kbd>Ctrl + Alt + Space</kbd> 呼出</span></footer>
   </main>;
 }

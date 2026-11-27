@@ -265,7 +265,19 @@ pub async fn resolve_icon_pairs(
 
 #[tauri::command]
 pub async fn open_entry(target: String, launch_kind: String, quick: Option<bool>) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || open_entry_blocking(target, launch_kind, quick.unwrap_or(false)))
+    tauri::async_runtime::spawn_blocking(move || {
+        let quick = quick.unwrap_or(false);
+        #[cfg(all(windows, feature = "desktop-quick-preview"))]
+        let start = std::time::Instant::now();
+        let result = open_entry_blocking(target, launch_kind, quick);
+        #[cfg(all(windows, feature = "desktop-quick-preview"))]
+        if quick {
+            crate::desktop_diagnostics::record("quick-launch-dispatch", serde_json::json!({
+                "elapsed_ms": start.elapsed().as_millis() as u64, "accepted": result.is_ok(),
+            }));
+        }
+        result
+    })
         .await.map_err(|e| e.to_string())?
 }
 

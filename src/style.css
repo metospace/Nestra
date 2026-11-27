@@ -169,8 +169,6 @@
 .desktop-quick-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(109px,1fr)); gap:5px; }
 .desktop-quick-grid > div { min-width:0; }
 .desktop-quick-result { display:flex; flex-direction:column; align-items:center; gap:4px; width:100%; height:95px; padding:6px 5px; text-align:center; background:color-mix(in srgb,var(--accent) 22%,transparent); border:1px solid color-mix(in srgb,var(--border) 42%,transparent); border-radius:clamp(5px,var(--quick-radius),11px); }
-.desktop-quick-result-cell { position:relative; min-width:0; }
-.desktop-quick-folder-open { position:absolute; top:4px; right:4px; }
 .desktop-quick-result:hover,.desktop-quick-result.is-active { background:var(--accent); border-color:var(--border); }
 .desktop-quick-result.is-active { border-color:color-mix(in srgb,var(--primary) 57%,transparent); }
 .desktop-quick-result:focus-visible { outline:2px solid var(--ring); outline-offset:-2px; }

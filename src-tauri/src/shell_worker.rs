@@ -3,7 +3,7 @@
 //! startup and the single-instance lock. The organizer never loads those DLLs.
 #![cfg(windows)]
 
-use std::{io::{Read, Write}, os::windows::process::CommandExt, process::{Child, Command, Stdio}, time::{Duration, Instant}};
+use std::{io::{Read, Write}, os::windows::{io::AsRawHandle, process::CommandExt}, process::{Child, Command, Stdio}, time::{Duration, Instant}};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -59,23 +59,29 @@ pub fn run_if_requested() -> bool {
 
 /// Wait without letting a hung extension block the organizer indefinitely.
 fn wait_for(child: &mut Child, timeout: Duration) -> Result<(), String> {
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => return Err(format!("系统扩展异常退出（{status}）")),
-            Ok(None) if start.elapsed() < timeout => std::thread::sleep(Duration::from_millis(25)),
-            outcome => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(match outcome { Err(e) => e.to_string(), _ => "系统扩展响应超时".into() });
-            }
+    use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
+    use windows::Win32::System::Threading::WaitForSingleObject;
+    // Wake as soon as Windows signals the worker; don't quantize each launch
+    // to a 25 ms sleep loop. The child owns the borrowed handle until we reap it.
+    let budget = timeout.as_millis().min((u32::MAX - 1) as u128) as u32;
+    let result = unsafe { WaitForSingleObject(HANDLE(child.as_raw_handle()), budget) };
+    match result {
+        WAIT_OBJECT_0 => {
+            let status = child.wait().map_err(|err| err.to_string())?;
+            if status.success() { Ok(()) } else { Err(format!("系统扩展异常退出（{status}）")) }
+        }
+        other => {
+            let error = if other == WAIT_TIMEOUT { "系统扩展响应超时".into() }
+                else { std::io::Error::last_os_error().to_string() };
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(error)
         }
     }
 }
 
 static QUICK_STANDBY: std::sync::Mutex<Option<(Child, Instant)>> = std::sync::Mutex::new(None);
-const QUICK_LEASE: Duration = Duration::from_secs(12);
+const QUICK_LEASE: Duration = Duration::from_secs(30);
 
 fn spawn_worker() -> Result<Child, String> {
     Command::new(std::env::current_exe().map_err(|e| e.to_string())?)

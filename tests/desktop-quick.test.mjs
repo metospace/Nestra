@@ -110,3 +110,26 @@ test('keyboard Enter keeps the selected Windows path across late results', () =>
   assert.equal(context.quickEnterResult(reranked, null).entry.path, strong.entry.path);
   assert.equal(context.quickEnterResult([strong], path), undefined);
 });
+
+test('folder card clicks and Enter launch the original entry rather than scanning its children', async () => {
+  const ui = file('src/features/DesktopQuickWindow.tsx');
+  const activate = ui.match(/function activate\(entry: DesktopEntry\) \{[\s\S]*?\n  \}/)?.[0];
+  assert.ok(activate);
+  assert.match(ui, /onClick=\{\(\) => activate\(entry\)\}/);
+  assert.match(ui, /const item = quickEnterResult\(results, activePath\);[\s\S]*?activate\(item.entry\)/);
+  const ctx = vm.createContext({ calls: [] });
+  const launchEntry = file('src/lib/tauri.ts').match(/export function launchEntry\([\s\S]*?\n\}/)?.[0].replace(/^export /,'');
+  assert.ok(launchEntry);
+  vm.runInContext(ts.transpile(`
+    const openEntry = (...args) => calls.push(args);
+    const launch = (action) => action();
+    ${launchEntry}
+    ${activate}
+    activate({ name: "Folder", kind: "folder", path: "C:/Test Folder", launchKind: "filesystem" });
+    activate({ name: "Folder Shortcut", kind: "shortcut", path: "C:/Link.lnk", target: "D:/Target", launchKind: "filesystem" });
+  `), ctx);
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.calls)), [
+    ['C:/Test Folder', 'filesystem', true], ['C:/Link.lnk', 'filesystem', true],
+  ]);
+  assert.doesNotMatch(activate, /scanFolder|navigate/);
+});
